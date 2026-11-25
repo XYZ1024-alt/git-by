@@ -70,8 +70,8 @@
   <text x="36" y="105" class="sans sec-label">COMMITS</text>
   <circle cx="108" cy="101" r="4" fill="#58a6ff"/>
   <text x="118" y="105" class="mono model-name">AI-Assisted: 109 (73.6%)</text>
-  <circle cx="672" cy="101" r="4" fill="#3fb950"/>
-  <text x="804" y="105" text-anchor="end" class="mono model-name">Human Solo: 39 (26.4%)</text>
+  <circle cx="635" cy="101" r="4" fill="#3fb950"/>
+  <text x="804" y="105" text-anchor="end" textLength="159" class="mono model-name">Human Solo: 39 (26.4%)</text>
   <g clip-path="url(#commit-bar-clip)">
     <rect x="36" y="114" width="768" height="10" fill="#21262d"/>
     <rect x="36" y="114" width="565" height="10" fill="url(#ai-commit-grad)"/>
@@ -82,8 +82,8 @@
   <text x="36" y="151" class="sans sec-label">LOC CHANGED</text>
   <circle cx="132" cy="147" r="4" fill="#a371f7"/>
   <text x="142" y="151" class="mono model-name">AI: +11,840 / -2,190 (76.2%)</text>
-  <circle cx="614" cy="147" r="4" fill="#3fb950"/>
-  <text x="804" y="151" text-anchor="end" class="mono model-name">Human: +3,410 / -980 (23.8%)</text>
+  <circle cx="592" cy="147" r="4" fill="#3fb950"/>
+  <text x="804" y="151" text-anchor="end" textLength="202" class="mono model-name">Human: +3,410 / -980 (23.8%)</text>
   <g clip-path="url(#loc-bar-clip)">
     <rect x="36" y="160" width="768" height="10" fill="#21262d"/>
     <rect x="36" y="160" width="585" height="10" fill="url(#ai-loc-grad)"/>
@@ -151,6 +151,6 @@
 
   <!-- Bottom Footer -->
   <text x="24" y="400" class="mono foot">$ git by stats --badge ./assets/ai-provenance.svg</text>
-  <circle cx="518" cy="396" r="3.5" fill="#3fb950"/>
-  <text x="816" y="400" text-anchor="end" class="mono foot">GPG/SSH Intact &#183; Worktree Safe &#183; Zero Fake Co-Authors</text>
+  <circle cx="440.5" cy="396" r="3.5" fill="#3fb950"/>
+  <text x="816" y="400" text-anchor="end" textLength="366" class="mono foot">GPG/SSH Intact &#183; Worktree Safe &#183; Zero Fake Co-Authors</text>
 </svg>

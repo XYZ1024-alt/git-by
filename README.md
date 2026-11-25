@@ -163,19 +163,35 @@ Static `CGO_ENABLED=0` binaries for **Linux**, **macOS**, and **Windows** (`amd6
 
 #### Quick Start
 
-**Step 1 — Auto-configure your installed coding agents (`git by setup`)**
+**Step 1 — Configure your coding agents (`git by setup`)**
 
-Run `git by setup` (defaults to `--global`) once right after installing. It auto-detects installed coding agents (**Antigravity**, **Pi**, **Claude Code**, **Codex**, **OpenCode**, plus existing **Cursor** / **Windsurf** rules) and surgically injects idempotent provenance rules — **never** creating directories for uninstalled tools:
+Run `git by setup` (defaults to `--global`) right after installing. In an interactive terminal, an agent picker opens with detected tools pre-checked (`↑/↓` to move, `Space` to toggle any agent, `a` to toggle all, `Enter` to install, `q`/`Esc` to cancel); pass `-y` / `--yes` (or run in CI / pipes) to auto-configure detected agents directly without creating directories for uninstalled tools:
 
 ```text
 $ git by setup
+git-by setup (global)
+  ↑/↓ move · Space select · a toggle all · Enter install · q/Esc cancel
+
+  > [x] Antigravity (agy)        ~/.gemini/config/rules/git-by.md  detected
+    [x] Pi Agent (pi)            ~/.pi/agent/APPEND_SYSTEM.md      detected
+    [x] Claude Code (claude)     ~/.claude/rules/git-by.md         detected
+    [ ] Codex (codex)            ~/.codex/AGENTS.md                not detected
+    [ ] OpenCode (opencode)      ~/.config/opencode/AGENTS.md      not detected
+    [ ] DeepSeek Harness (dsh)   ~/.dsh/AGENTS.md                  not detected
+    [ ] Cursor (cursor)          ~/.cursorrules                    not detected
+    [ ] Windsurf (windsurf)      ~/.windsurfrules                  not detected
+
+  3 of 8 selected
+```
+
+Pressing `Enter` applies the selected rules and prints the summary:
+
+```text
 git-by setup (global)
 
   ✔ Antigravity   installed   ~/.gemini/config/rules/git-by.md
   ✔ Pi Agent      updated     ~/.pi/agent/APPEND_SYSTEM.md
   ✔ Claude Code   installed   ~/.claude/rules/git-by.md
-  - Codex         skipped     (~/.codex not found)
-  - OpenCode      skipped     (~/.config/opencode not found)
 
 Configured 3 agent(s). Your AI commits will now carry provenance automatically.
 ```
@@ -202,17 +218,20 @@ git by commit -S -m "feat: add worktree-isolated session store"
 `git by setup` manages a bounded, idempotent `<!-- git-by:start --> ... <!-- git-by:end -->` rule block across global agent configurations or per-repository instruction files, automatically tailoring `--harness <name>` for each agent:
 
 ```bash
-# Global auto-detection (default): configures only installed coding agents in $HOME
+# Interactive multi-select picker in a terminal (Space to select, Enter to install)
 git by setup
 git by setup --global
 
-# Repository scope: injects managed block into repo AGENTS.md, plus existing
-# CLAUDE.md / .cursorrules / .windsurfrules without creating clutter files
+# Non-interactive auto-detection (skips picker; default automatically in pipes/CI)
+git by setup --yes
+
+# Repository scope: pick from AGENTS.md, CLAUDE.md, .cursorrules, .windsurfrules
+# (or pass -y to update AGENTS.md + existing rule files without creating clutter)
 git by setup --project
 
-# Target specific agents (comma-separated or repeatable):
-# agy, pi, claude, codex, opencode, cursor, windsurf
-git by setup --agent agy,claude,cursor
+# Target specific agents non-interactively (comma-separated or repeatable):
+# agy, pi, claude, codex, opencode, dsh, cursor, windsurf
+git by setup --agent agy,claude,dsh,cursor
 
 # Preview planned actions with zero disk writes
 git by setup --dry-run
@@ -220,14 +239,15 @@ git by setup --dry-run
 # Uninstall (alias: --remove): cleanly deletes standalone rule files and losslessly
 # strips <!-- git-by:start --> ... <!-- git-by:end --> from shared files
 git by setup --uninstall
-git by setup --project --remove
+git by setup --project --remove -y
 ```
 
 | Flag | Behavior |
 | :--- | :--- |
-| *(default)* / `--global` | Auto-detects installed global agents (`~/.gemini`, `~/.pi`, `~/.claude`, `~/.codex`, `~/.config/opencode`, plus existing `~/.cursorrules` / `~/.windsurfrules`) without creating directories for uninstalled tools |
-| `--project` | Injects managed block into repo `AGENTS.md`, and updates any existing `CLAUDE.md`, `.cursorrules`, or `.windsurfrules` without creating clutter |
-| `--agent <names>` | Filter target agents (`agy`, `pi`, `claude`, `codex`, `opencode`, `cursor`, `windsurf`) |
+| *(default)* / `--global` | Opens the global multi-select agent picker on a TTY (detected agents pre-checked; checking any agent installs its rule file), or auto-configures detected agents (`~/.gemini`, `~/.pi`, `~/.claude`, `~/.codex`, `~/.config/opencode`, `~/.dsh` / `$DSH_HOME`, plus existing `~/.cursorrules` / `~/.windsurfrules`) in non-TTY mode |
+| `--project` | Opens the repository target picker on a TTY (`AGENTS.md` + existing rule files pre-checked), or injects into `AGENTS.md` + existing `CLAUDE.md` / `.cursorrules` / `.windsurfrules` in non-TTY mode |
+| `--agent <names>` | Bypass picker and filter target agents (`agy`, `pi`, `claude`, `codex`, `opencode`, `dsh`, `cursor`, `windsurf`) |
+| `-y`, `--yes` | Bypass interactive picker on a TTY and auto-configure detected targets |
 | `--dry-run` | Preview `installed` / `updated` / `removed` / `skipped` targets with zero filesystem changes |
 | `--uninstall`, `--remove` | Delete standalone `git-by.md` rule files and losslessly restore shared files byte-for-byte |
 | `--no-color` | Disable ANSI color output |
@@ -370,7 +390,7 @@ Embed the generated SVG anywhere in your `README.md`:
 
 | Command | Description |
 | :--- | :--- |
-| `git by setup [--global \| --project] [--agent <names>] [--uninstall \| --remove] [--dry-run] [--no-color]` | Auto-detect coding agents and idempotently install, update, preview, or remove provenance rules |
+| `git by setup [--global \| --project] [--agent <names>] [-y \| --yes] [--uninstall \| --remove] [--dry-run] [--no-color]` | Interactive multi-select agent picker on TTY (or automatic detection with `-y` / pipes) to install, update, preview, or remove provenance rules |
 | `git by set <role> <model> [--harness <h>] [--tool <t>...] [--replace]` | Record agent participation in the current worktree's `by-session.json` |
 | `git by status` | Preview merged roles, `Git Author`, `Git Committer`, and `Git Trailers` |
 | `git by clear` | Clear staged provenance metadata for the current worktree |
@@ -500,19 +520,35 @@ cd git-by && make install
 
 #### 30 秒快速上手
 
-**第一步：一键全局接入已安装的编程 Agent（`git by setup`）**
+**第一步：一键接入编程 Agent（`git by setup`）**
 
-安装完成后只需运行一次 `git by setup`（默认 `--global`），即可自动扫描本机已安装的编程 Agent（**Antigravity**、**Pi**、**Claude Code**、**Codex**、**OpenCode**，以及已存在的 **Cursor** / **Windsurf** 全局规则），无损、幂等地注入溯源规则——**绝不会为未安装的工具创建多余配置目录**：
+安装完成后运行 `git by setup`（默认 `--global`）。在交互式终端中会打开多选面板并默认勾选本机已检测到的 Agent（`↑/↓` 移动、`Space` 勾选/取消任意 Agent、`a` 全选切换、`Enter` 开始安装、`q`/`Esc` 取消）；传入 `-y` / `--yes`（或在管道 / CI 中运行）则直接按自动检测结果无损注入，**绝不为未安装工具创建多余目录**：
 
 ```text
 $ git by setup
+git-by setup (global)
+  ↑/↓ move · Space select · a toggle all · Enter install · q/Esc cancel
+
+  > [x] Antigravity (agy)        ~/.gemini/config/rules/git-by.md  detected
+    [x] Pi Agent (pi)            ~/.pi/agent/APPEND_SYSTEM.md      detected
+    [x] Claude Code (claude)     ~/.claude/rules/git-by.md         detected
+    [ ] Codex (codex)            ~/.codex/AGENTS.md                not detected
+    [ ] OpenCode (opencode)      ~/.config/opencode/AGENTS.md      not detected
+    [ ] DeepSeek Harness (dsh)   ~/.dsh/AGENTS.md                  not detected
+    [ ] Cursor (cursor)          ~/.cursorrules                    not detected
+    [ ] Windsurf (windsurf)      ~/.windsurfrules                  not detected
+
+  3 of 8 selected
+```
+
+按 `Enter` 确认后即刻完成幂等写入：
+
+```text
 git-by setup (global)
 
   ✔ Antigravity   installed   ~/.gemini/config/rules/git-by.md
   ✔ Pi Agent      updated     ~/.pi/agent/APPEND_SYSTEM.md
   ✔ Claude Code   installed   ~/.claude/rules/git-by.md
-  - Codex         skipped     (~/.codex not found)
-  - OpenCode      skipped     (~/.config/opencode not found)
 
 Configured 3 agent(s). Your AI commits will now carry provenance automatically.
 ```
@@ -539,30 +575,35 @@ git by commit -S -m "feat: add worktree-isolated session store"
 `git by setup` 通过受控的 `<!-- git-by:start --> ... <!-- git-by:end -->` 标记块管理全局或仓库级 Agent 规则文件，并为每个 Agent 自动匹配对应的 `--harness <name>`：
 
 ```bash
-# 默认全局自动检测：仅配置 $HOME 下已安装的编程 Agent，绝不创建幽灵目录
+# 交互式多选面板（终端默认：Space 空格勾选目标 Agent，Enter 回车开始安装）
 git by setup
 git by setup --global
 
-# 仓库级接入：写入当前仓库 AGENTS.md，并自动更新已存在的 CLAUDE.md / .cursorrules / .windsurfrules（不制造多余空文件）
+# 非交互式自动检测（跳过选择面板；在管道与 CI 环境中也会自动启用）
+git by setup --yes
+
+# 仓库级接入：交互式选择 AGENTS.md / CLAUDE.md / .cursorrules / .windsurfrules
+# （传入 -y 则默认写入 AGENTS.md 并更新仓库内已存在的规则文件，不制造多余空文件）
 git by setup --project
 
-# 指定目标 Agent（支持逗号分隔或重复传参）：
-# agy, pi, claude, codex, opencode, cursor, windsurf
-git by setup --agent agy,claude,cursor
+# 非交互式指定目标 Agent（支持逗号分隔或重复传参）：
+# agy, pi, claude, codex, opencode, dsh, cursor, windsurf
+git by setup --agent agy,claude,dsh,cursor
 
 # 预览即将执行的变更（零磁盘写入）
 git by setup --dry-run
 
 # 干净卸载（别名 --remove）：删除独立规则文件，并从共享文件中无损剥离 <!-- git-by:start --> ... <!-- git-by:end --> 区块
 git by setup --uninstall
-git by setup --project --remove
+git by setup --project --remove -y
 ```
 
 | 参数 | 行为说明 |
 | :--- | :--- |
-| *(默认)* / `--global` | 全局自动检测已安装的 Agent（`~/.gemini`、`~/.pi`、`~/.claude`、`~/.codex`、`~/.config/opencode` 及已存在的 `~/.cursorrules` / `~/.windsurfrules`），未安装工具自动跳过且不创建目录 |
-| `--project` | 将受管规则块注入仓库根目录 `AGENTS.md`，并同步更新仓库内**已存在**的 `CLAUDE.md`、`.cursorrules`、`.windsurfrules`（不会新建多余文件） |
-| `--agent <names>` | 精确指定目标 Agent（支持 `agy`、`pi`、`claude`、`codex`、`opencode`、`cursor`、`windsurf`） |
+| *(默认)* / `--global` | 在终端 TTY 下打开全局 Agent 多选面板（已检测到的工具默认勾选，手动勾选任意 Agent 均会创建对应规则文件）；非交互模式下自动配置已检测到的工具（`~/.gemini`、`~/.pi`、`~/.claude`、`~/.codex`、`~/.config/opencode`、`~/.dsh` / `$DSH_HOME` 及已存在的 `~/.cursorrules` / `~/.windsurfrules`）且不创建多余目录 |
+| `--project` | 在终端 TTY 下打开仓库规则多选面板（默认勾选 `AGENTS.md` 与已存在的规则文件）；非交互模式下写入 `AGENTS.md` 并同步更新已存在的 `CLAUDE.md`、`.cursorrules`、`.windsurfrules` |
+| `--agent <names>` | 跳过交互面板并精确指定目标 Agent（支持 `agy`、`pi`、`claude`、`codex`、`opencode`、`dsh`、`cursor`、`windsurf`） |
+| `-y`, `--yes` | 在终端 TTY 下跳过交互多选面板，直接按自动检测结果执行 |
 | `--dry-run` | 仅预览 `installed` / `updated` / `removed` / `skipped` 计划，零磁盘写入 |
 | `--uninstall`, `--remove` | 删除独立的 `git-by.md` 规则文件，并从共享配置文件中按字节无损剥离 `git-by` 规则块 |
 | `--no-color` | 禁用终端 ANSI 颜色输出 |
@@ -683,7 +724,7 @@ git by stats --badge ./ai-provenance.svg
 
 | 命令 | 说明 |
 | :--- | :--- |
-| `git by setup [--global \| --project] [--agent <names>] [--uninstall \| --remove] [--dry-run] [--no-color]` | 自动检测已安装的编程 Agent，幂等安装、更新、预览或无损移除溯源规则 |
+| `git by setup [--global \| --project] [--agent <names>] [-y \| --yes] [--uninstall \| --remove] [--dry-run] [--no-color]` | 终端交互式多选 Agent 面板（支持 `-y` 或管道自动检测），幂等安装、更新、预览或无损移除溯源规则 |
 | `git by set <role> <model> [--harness <h>] [--tool <t>...] [--replace]` | 在当前 Worktree 的 `by-session.json` 中记录模型角色参与信息 |
 | `git by status` | 预览合并后的多智能体分工、`Git Author`、`Git Committer` 与 `Git Trailers` |
 | `git by clear` | 清空当前 Worktree 暂存的会话溯源元数据 |

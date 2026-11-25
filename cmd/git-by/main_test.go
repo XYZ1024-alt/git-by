@@ -141,6 +141,8 @@ func (e *testEnv) applyProcessEnv(extra map[string]string) func(string) (string,
 		"GIT_COMMITTER_NAME",
 		"GIT_COMMITTER_EMAIL",
 		"NO_COLOR",
+		"DSH_HOME",
+		"DSH_AGENTS_HOME",
 	} {
 		if _, exists := extra[k]; !exists {
 			e.t.Setenv(k, "")
@@ -943,7 +945,7 @@ func TestSetupProjectScopeSubdirAndValidationErrors(t *testing.T) {
 
 	// 4) Help & validation error cases.
 	helpSetup := env.mustRunApp(repo, nil, "help", "setup")
-	for _, flag := range []string{"--global", "--project", "--agent", "--uninstall", "--remove", "--dry-run"} {
+	for _, flag := range []string{"--global", "--project", "--agent", "dsh", "--yes", "-y", "--uninstall", "--remove", "--dry-run"} {
 		if !strings.Contains(helpSetup, flag) {
 			t.Fatalf("help setup missing %q:\n%s", flag, helpSetup)
 		}
@@ -965,5 +967,107 @@ func TestSetupProjectScopeSubdirAndValidationErrors(t *testing.T) {
 	}
 	if code, _, errOut := env.runApp(nonGitDir, nil, "setup", "--project"); code != 1 {
 		t.Fatalf("expected exit 1 for --project outside git repo, got %d (stderr: %s)", code, errOut)
+	}
+}
+
+func TestSetupInteractiveAppFlowsYesFlagAndCancel(t *testing.T) {
+	env := newTestRepo(t)
+	repo := env.repoDir
+
+	virtHome := filepath.Join(env.rootDir, "interactive-home")
+	if err := os.MkdirAll(filepath.Join(virtHome, ".gemini"), 0o755); err != nil {
+		t.Fatalf("mkdir .gemini: %v", err)
+	}
+	homeEnv := map[string]string{"HOME": virtHome, "NO_COLOR": "1"}
+
+	runInteractive := func(workDir string, input string, args ...string) (int, string, string, int) {
+		t.Helper()
+		lookup := env.applyProcessEnv(homeEnv)
+		var stdout, stderr bytes.Buffer
+		restored := 0
+		app := &App{
+			stdin:     strings.NewReader(input),
+			stdout:    &stdout,
+			stderr:    &stderr,
+			lookupEnv: lookup,
+			workDir:   workDir,
+			isTTY:     func() bool { return true },
+			rawMode: func() (func(), error) {
+				return func() { restored++ }, nil
+			},
+		}
+		code := app.Run(args)
+		return code, stdout.String(), stderr.String(), restored
+	}
+
+	// 1) Ctrl+C exits 130, restores terminal, writes nothing.
+	code, out, _, restored := runInteractive(repo, "\x03", "setup")
+	if code != 130 || restored != 1 {
+		t.Fatalf("Ctrl+C expected code=130 restored=1, got code=%d restored=%d\nout:\n%s", code, restored, out)
+	}
+	if _, err := os.Stat(filepath.Join(virtHome, ".gemini", "config")); !os.IsNotExist(err) {
+		t.Fatalf("Ctrl+C unexpectedly created files")
+	}
+
+	// 2) 0 agents selected + Enter prints clean notice, exits 0, writes nothing.
+	// Only Antigravity (index 0) is pre-selected -> Space unchecks it -> Enter confirms 0 selected.
+	code, out, _, restored = runInteractive(repo, " \r", "setup")
+	if code != 0 || restored != 1 {
+		t.Fatalf("0-selected expected code=0 restored=1, got code=%d restored=%d", code, restored)
+	}
+	if !strings.Contains(out, "No agents selected; nothing changed.") {
+		t.Fatalf("expected 0-selected message, got:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(virtHome, ".gemini", "config")); !os.IsNotExist(err) {
+		t.Fatalf("0-selected Enter unexpectedly created files")
+	}
+
+	// 3) Interactive global install: keep Antigravity checked, move down to OpenCode (index 4: jjjj)
+	// and DeepSeek Harness (index 5: j), toggle both with Space, confirm with Enter -> creates both!
+	code, out, errOut, restored := runInteractive(repo, "jjjj j \r", "setup")
+	if code != 0 || restored != 1 {
+		t.Fatalf("interactive install failed: code=%d restored=%d stderr=%s\nout:\n%s", code, restored, errOut, out)
+	}
+	if _, err := os.Stat(filepath.Join(virtHome, ".gemini", "config", "rules", "git-by.md")); err != nil {
+		t.Fatalf("expected Antigravity rule installed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(virtHome, ".config", "opencode", "AGENTS.md")); err != nil {
+		t.Fatalf("expected OpenCode rule installed in newly created dir: %v", err)
+	}
+	dshGlobalRule := filepath.Join(virtHome, ".dsh", "AGENTS.md")
+	if b, err := os.ReadFile(dshGlobalRule); err != nil || !strings.Contains(string(b), "--harness dsh") {
+		t.Fatalf("expected DeepSeek Harness rule installed at %s with --harness dsh: err=%v", dshGlobalRule, err)
+	}
+
+	// 4) --yes (-y) on a TTY skips interactive picker completely (even with empty stdin!).
+	code, out, errOut, restored = runInteractive(repo, "", "setup", "-y")
+	if code != 0 || restored != 0 {
+		t.Fatalf("--yes on TTY should not enter raw mode: code=%d restored=%d stderr=%s", code, restored, errOut)
+	}
+	if !strings.Contains(out, "Configured 3 agent(s).") {
+		t.Fatalf("unexpected --yes output:\n%s", out)
+	}
+
+	// 5) Interactive --project install & --project --uninstall.
+	// In empty repo, AGENTS.md (index 0) is pre-selected; move down to Cursor (.cursorrules, index 2: jj), Space, Enter.
+	code, out, errOut, restored = runInteractive(repo, "jj \r", "setup", "--project")
+	if code != 0 || restored != 1 {
+		t.Fatalf("interactive --project failed: code=%d restored=%d stderr=%s", code, restored, errOut)
+	}
+	for _, rel := range []string{"AGENTS.md", ".cursorrules"} {
+		if _, err := os.Stat(filepath.Join(repo, rel)); err != nil {
+			t.Fatalf("expected %s created in interactive --project: %v", rel, err)
+		}
+	}
+
+	// Interactive --project --uninstall pre-selects both configured files -> Enter removes both!
+	code, out, errOut, restored = runInteractive(repo, "\r", "setup", "--project", "--uninstall")
+	if code != 0 || restored != 1 {
+		t.Fatalf("interactive --project --uninstall failed: code=%d restored=%d stderr=%s", code, restored, errOut)
+	}
+	for _, rel := range []string{"AGENTS.md", ".cursorrules"} {
+		if _, err := os.Stat(filepath.Join(repo, rel)); !os.IsNotExist(err) {
+			t.Fatalf("expected %s removed in interactive --project --uninstall, err=%v", rel, err)
+		}
 	}
 }

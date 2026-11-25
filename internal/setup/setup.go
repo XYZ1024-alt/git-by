@@ -33,12 +33,15 @@ const (
 )
 
 type Options struct {
-	Scope       Scope    // ScopeGlobal (default if empty) or ScopeProject
-	HomeDir     string   // required for ScopeGlobal
-	ProjectRoot string   // required for ScopeProject
-	Agents      []string // optional filter: agy, pi, claude, codex, opencode, cursor, windsurf
-	Uninstall   bool
-	DryRun      bool
+	Scope             Scope    // ScopeGlobal (default if empty) or ScopeProject
+	HomeDir           string   // required for ScopeGlobal
+	DSHHome           string   // optional $DSH_HOME override for DeepSeek Harness (defaults to ~/.dsh)
+	ProjectRoot       string   // required for ScopeProject
+	Agents            []string // optional filter: agy, pi, claude, codex, opencode, dsh, cursor, windsurf
+	SelectedTargets   []string // optional interactive picker target IDs
+	CreateMissingDirs bool     // create parent directories for explicitly selected global targets
+	Uninstall         bool
+	DryRun            bool
 }
 
 type TargetResult struct {
@@ -83,6 +86,7 @@ var defaultGlobalAgents = []string{
 	"claude",
 	"codex",
 	"opencode",
+	"dsh",
 	"cursor",
 	"windsurf",
 }
@@ -129,7 +133,7 @@ func ParseAgents(raw []string) ([]string, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
-	const supportedList = "agy, pi, claude, codex, opencode, cursor, windsurf"
+	const supportedList = "agy, pi, claude, codex, opencode, dsh, cursor, windsurf"
 
 	var out []string
 	seen := make(map[string]struct{}, len(raw))
@@ -169,6 +173,8 @@ func canonicalAgentID(name string) (string, bool) {
 		return "codex", true
 	case "opencode":
 		return "opencode", true
+	case "dsh", "deepseek-harness":
+		return "dsh", true
 	case "cursor":
 		return "cursor", true
 	case "windsurf":
@@ -190,6 +196,8 @@ func agentDisplayName(agentID string) string {
 		return "Codex"
 	case "opencode":
 		return "OpenCode"
+	case "dsh":
+		return "DeepSeek Harness"
 	case "cursor":
 		return "Cursor"
 	case "windsurf":
@@ -211,6 +219,8 @@ func agentHarness(agentID string) string {
 		return "codex"
 	case "opencode":
 		return "opencode"
+	case "dsh":
+		return "dsh"
 	case "cursor":
 		return "cursor"
 	case "windsurf":
@@ -236,6 +246,7 @@ func Run(opts Options) (*Summary, error) {
 	}
 
 	var specs []targetSpec
+	createMissing := opts.CreateMissingDirs && !opts.Uninstall
 	switch scope {
 	case ScopeGlobal:
 		homeDir := strings.TrimSpace(opts.HomeDir)
@@ -246,7 +257,15 @@ func Run(opts Options) (*Summary, error) {
 		if !dirExists(homeDir) {
 			return nil, fmt.Errorf("home directory %q does not exist", homeDir)
 		}
-		specs = resolveGlobalTargets(homeDir, agents)
+		if len(opts.SelectedTargets) > 0 {
+			selectedAgents, err := ParseAgents(opts.SelectedTargets)
+			if err != nil {
+				return nil, err
+			}
+			specs = resolveGlobalTargetsWithMode(homeDir, opts.DSHHome, selectedAgents, createMissing)
+		} else {
+			specs = resolveGlobalTargetsWithMode(homeDir, opts.DSHHome, agents, createMissing)
+		}
 
 	case ScopeProject:
 		projectRoot := strings.TrimSpace(opts.ProjectRoot)
@@ -257,7 +276,15 @@ func Run(opts Options) (*Summary, error) {
 		if !dirExists(projectRoot) {
 			return nil, fmt.Errorf("project root %q does not exist", projectRoot)
 		}
-		specs = resolveProjectTargets(projectRoot, agents, opts.Uninstall)
+		if len(opts.SelectedTargets) > 0 {
+			var err error
+			specs, err = resolveSelectedProjectTargets(projectRoot, opts.SelectedTargets)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			specs = resolveProjectTargets(projectRoot, agents, opts.Uninstall)
+		}
 	}
 
 	summary := &Summary{
@@ -282,6 +309,10 @@ func Run(opts Options) (*Summary, error) {
 }
 
 func resolveGlobalTargets(homeDir string, agents []string) []targetSpec {
+	return resolveGlobalTargetsWithMode(homeDir, "", agents, false)
+}
+
+func resolveGlobalTargetsWithMode(homeDir string, dshHome string, agents []string, createMissing bool) []targetSpec {
 	explicit := len(agents) > 0
 	order := agents
 	if !explicit {
@@ -290,15 +321,39 @@ func resolveGlobalTargets(homeDir string, agents []string) []targetSpec {
 
 	specs := make([]targetSpec, 0, len(order))
 	for _, id := range order {
-		spec, include := resolveOneGlobalTarget(homeDir, id, explicit)
+		spec, include := resolveOneGlobalTargetWithDSH(homeDir, dshHome, id, explicit)
 		if include {
+			if createMissing && explicit {
+				spec.skipReason = ""
+			}
 			specs = append(specs, spec)
 		}
 	}
 	return specs
 }
 
+func resolveDshHomeDir(homeDir, dshHome string) (string, string) {
+	trimmed := strings.TrimSpace(dshHome)
+	if trimmed == "" {
+		def := filepath.Join(homeDir, ".dsh")
+		return def, formatHomeDisplayPath(homeDir, def)
+	}
+	expanded := trimmed
+	switch {
+	case trimmed == "~":
+		expanded = homeDir
+	case strings.HasPrefix(trimmed, "~/") || strings.HasPrefix(trimmed, `~\`):
+		expanded = filepath.Join(homeDir, trimmed[2:])
+	}
+	cleaned := filepath.Clean(expanded)
+	return cleaned, formatHomeDisplayPath(homeDir, cleaned)
+}
+
 func resolveOneGlobalTarget(homeDir string, agentID string, explicit bool) (targetSpec, bool) {
+	return resolveOneGlobalTargetWithDSH(homeDir, "", agentID, explicit)
+}
+
+func resolveOneGlobalTargetWithDSH(homeDir string, dshHome string, agentID string, explicit bool) (targetSpec, bool) {
 	switch agentID {
 	case "agy":
 		target := filepath.Join(homeDir, ".gemini", "config", "rules", "git-by.md")
@@ -372,6 +427,22 @@ func resolveOneGlobalTarget(homeDir string, agentID string, explicit bool) (targ
 		}
 		if !dirExists(filepath.Join(homeDir, ".config", "opencode")) {
 			spec.skipReason = "(~/.config/opencode not found)"
+		}
+		return spec, true
+
+	case "dsh":
+		dshDir, dshDisplayDir := resolveDshHomeDir(homeDir, dshHome)
+		target := filepath.Join(dshDir, "AGENTS.md")
+		spec := targetSpec{
+			agentID:      "dsh",
+			displayName:  "DeepSeek Harness",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "dsh",
+			isStandalone: false,
+		}
+		if !dirExists(dshDir) {
+			spec.skipReason = fmt.Sprintf("(%s not found)", dshDisplayDir)
 		}
 		return spec, true
 
@@ -535,7 +606,7 @@ func resolveProjectTargets(projectRoot string, agents []string, uninstall bool) 
 	var agentsMDMapped []string
 	for _, id := range agents {
 		switch id {
-		case "agy", "pi", "codex", "opencode":
+		case "agy", "pi", "codex", "opencode", "dsh":
 			agentsMDMapped = append(agentsMDMapped, id)
 		}
 	}
@@ -571,7 +642,7 @@ func resolveProjectTargets(projectRoot string, agents []string, uninstall bool) 
 				harness:      "windsurf",
 				isStandalone: false,
 			})
-		case "agy", "pi", "codex", "opencode":
+		case "agy", "pi", "codex", "opencode", "dsh":
 			if addedAgentsMD {
 				continue
 			}
@@ -991,6 +1062,103 @@ func formatHomeDisplayPath(homeDir, targetPath string) string {
 		return "~/" + filepath.ToSlash(rel)
 	}
 	return filepath.ToSlash(targetPath)
+}
+
+func resolveSelectedProjectTargets(projectRoot string, selected []string) ([]targetSpec, error) {
+	seen := make(map[string]struct{}, len(selected))
+	specs := make([]targetSpec, 0, len(selected))
+
+	for _, raw := range selected {
+		id := strings.ToLower(strings.TrimSpace(raw))
+		if id == "agents.md" {
+			id = "agents"
+		}
+		if id != "agents" {
+			canonical, ok := canonicalAgentID(id)
+			if !ok {
+				return nil, fmt.Errorf("unknown project target %q", raw)
+			}
+			id = canonical
+		}
+
+		switch id {
+		case "agents":
+			if _, dup := seen["agents"]; dup {
+				continue
+			}
+			seen["agents"] = struct{}{}
+			specs = append(specs, targetSpec{
+				agentID:      "agents",
+				displayName:  "AGENTS.md",
+				path:         filepath.Join(projectRoot, "AGENTS.md"),
+				displayPath:  "AGENTS.md",
+				harness:      "",
+				isStandalone: false,
+			})
+		case "claude":
+			if _, dup := seen["claude"]; dup {
+				continue
+			}
+			seen["claude"] = struct{}{}
+			specs = append(specs, targetSpec{
+				agentID:      "claude",
+				displayName:  "Claude Code",
+				path:         filepath.Join(projectRoot, "CLAUDE.md"),
+				displayPath:  "CLAUDE.md",
+				harness:      "claude-code",
+				isStandalone: false,
+			})
+		case "cursor":
+			if _, dup := seen["cursor"]; dup {
+				continue
+			}
+			seen["cursor"] = struct{}{}
+			specs = append(specs, targetSpec{
+				agentID:      "cursor",
+				displayName:  "Cursor",
+				path:         filepath.Join(projectRoot, ".cursorrules"),
+				displayPath:  ".cursorrules",
+				harness:      "cursor",
+				isStandalone: false,
+			})
+		case "windsurf":
+			if _, dup := seen["windsurf"]; dup {
+				continue
+			}
+			seen["windsurf"] = struct{}{}
+			specs = append(specs, targetSpec{
+				agentID:      "windsurf",
+				displayName:  "Windsurf",
+				path:         filepath.Join(projectRoot, ".windsurfrules"),
+				displayPath:  ".windsurfrules",
+				harness:      "windsurf",
+				isStandalone: false,
+			})
+		case "agy", "pi", "codex", "opencode", "dsh":
+			if _, dup := seen["agents"]; dup {
+				continue
+			}
+			seen["agents"] = struct{}{}
+			specs = append(specs, targetSpec{
+				agentID:      "agents",
+				displayName:  "AGENTS.md",
+				path:         filepath.Join(projectRoot, "AGENTS.md"),
+				displayPath:  "AGENTS.md",
+				harness:      "",
+				isStandalone: false,
+			})
+		}
+	}
+	return specs, nil
+}
+
+func fileHasMarkers(path string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	_, _, ok := findManagedRange(string(b))
+	return ok
 }
 
 func dirExists(path string) bool {

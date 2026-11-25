@@ -33,6 +33,8 @@ type App struct {
 	stderr    io.Writer
 	lookupEnv func(string) (string, bool)
 	workDir   string
+	isTTY     func() bool
+	rawMode   func() (restore func(), err error)
 }
 
 func (a *App) Run(args []string) int {

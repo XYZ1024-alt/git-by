@@ -48,13 +48,13 @@ func TestParseAgents(t *testing.T) {
 
 	got, err = ParseAgents([]string{
 		" Antigravity , pi-agent ",
-		"CLAUDE-CODE,openai-codex,opencode",
-		"agy,Cursor,WINDSURF,claude",
+		"CLAUDE-CODE,openai-codex,opencode,DEEPSEEK-HARNESS",
+		"agy,dsh,Cursor,WINDSURF,claude",
 	})
 	if err != nil {
 		t.Fatalf("ParseAgents unexpected error: %v", err)
 	}
-	want := []string{"agy", "pi", "claude", "codex", "opencode", "cursor", "windsurf"}
+	want := []string{"agy", "pi", "claude", "codex", "opencode", "dsh", "cursor", "windsurf"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ParseAgents = %v, want %v", got, want)
 	}
@@ -101,13 +101,14 @@ func TestGlobalAutoDetectionSafetyAndRoundtrip(t *testing.T) {
 	if drySummary.ActiveCount != 3 {
 		t.Fatalf("DryRun ActiveCount = %d, want 3", drySummary.ActiveCount)
 	}
-	if len(drySummary.Results) != 5 {
-		t.Fatalf("DryRun len(Results) = %d, want 5", len(drySummary.Results))
+	if len(drySummary.Results) != 6 {
+		t.Fatalf("DryRun len(Results) = %d, want 6", len(drySummary.Results))
 	}
 	assertNotExists(t, filepath.Join(home, ".gemini", "config"))
 	assertNotExists(t, filepath.Join(home, ".claude", "rules"))
 	assertNotExists(t, filepath.Join(home, ".codex"))
 	assertNotExists(t, filepath.Join(home, ".config"))
+	assertNotExists(t, filepath.Join(home, ".dsh"))
 	if gotPi := mustReadFile(t, piPath); !bytes.Equal(gotPi, origPiContent) {
 		t.Fatalf("DryRun mutated %s", piPath)
 	}
@@ -131,11 +132,12 @@ func TestGlobalAutoDetectionSafetyAndRoundtrip(t *testing.T) {
 	wantSummary := strings.Join([]string{
 		"git-by setup (global)",
 		"",
-		"  ✔ Antigravity   installed   ~/.gemini/config/rules/git-by.md",
-		"  ✔ Pi Agent      updated     ~/.pi/agent/APPEND_SYSTEM.md",
-		"  ✔ Claude Code   installed   ~/.claude/rules/git-by.md",
-		"  - Codex         skipped     (~/.codex not found)",
-		"  - OpenCode      skipped     (~/.config/opencode not found)",
+		"  ✔ Antigravity        installed   ~/.gemini/config/rules/git-by.md",
+		"  ✔ Pi Agent           updated     ~/.pi/agent/APPEND_SYSTEM.md",
+		"  ✔ Claude Code        installed   ~/.claude/rules/git-by.md",
+		"  - Codex              skipped     (~/.codex not found)",
+		"  - OpenCode           skipped     (~/.config/opencode not found)",
+		"  - DeepSeek Harness   skipped     (~/.dsh not found)",
 		"",
 		"Configured 3 agent(s). Your AI commits will now carry provenance automatically.",
 		"",
@@ -156,6 +158,7 @@ func TestGlobalAutoDetectionSafetyAndRoundtrip(t *testing.T) {
 	// Uninstalled tools MUST NOT have top-level dirs created.
 	assertNotExists(t, filepath.Join(home, ".codex"))
 	assertNotExists(t, filepath.Join(home, ".config"))
+	assertNotExists(t, filepath.Join(home, ".dsh"))
 	assertNotExists(t, filepath.Join(home, ".cursor"))
 	assertNotExists(t, filepath.Join(home, ".cursorrules"))
 	assertNotExists(t, filepath.Join(home, ".windsurfrules"))
@@ -427,8 +430,8 @@ func TestGlobalCursorAndWindsurfDetectionAndExplicitFilter(t *testing.T) {
 		if err != nil {
 			t.Fatalf("auto-scan failed: %v", err)
 		}
-		if len(autoSum.Results) != 7 {
-			t.Fatalf("expected 7 targets in auto-scan when cursor+windsurf rules exist, got %d", len(autoSum.Results))
+		if len(autoSum.Results) != 8 {
+			t.Fatalf("expected 8 targets in auto-scan when cursor+windsurf rules exist, got %d", len(autoSum.Results))
 		}
 
 		// Auto-scan uninstall removes both dot-files completely since they have no user content.
@@ -558,6 +561,74 @@ func TestProjectScopeRulesAndAgentMapping(t *testing.T) {
 	assertNotExists(t, filepath.Join(root, ".cursorrules"))
 	if got := mustReadFile(t, claudeMD); !bytes.Equal(got, origClaude) {
 		t.Fatalf("CLAUDE.md not restored byte-for-byte:\ngot:  %q\nwant: %q", got, origClaude)
+	}
+}
+
+func TestDeepSeekHarnessGlobalDSHHomeAndProjectMapping(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	origDshNotes := []byte("# Global DeepSeek Harness Instructions\n\n- Keep diffs focused.\n")
+	dshAgentsPath := filepath.Join(home, ".dsh", "AGENTS.md")
+	mustWriteFile(t, dshAgentsPath, origDshNotes, 0o644)
+
+	// 1. Auto-detects ~/.dsh and updates ~/.dsh/AGENTS.md with --harness dsh.
+	sum, err := Run(Options{Scope: ScopeGlobal, HomeDir: home})
+	if err != nil {
+		t.Fatalf("Run global with ~/.dsh failed: %v", err)
+	}
+	if sum.ActiveCount != 1 {
+		t.Fatalf("ActiveCount = %d, want 1", sum.ActiveCount)
+	}
+	gotDsh := string(mustReadFile(t, dshAgentsPath))
+	if !strings.HasPrefix(gotDsh, string(origDshNotes)) || !strings.Contains(gotDsh, "--harness dsh") {
+		t.Fatalf("unexpected ~/.dsh/AGENTS.md content:\n%s", gotDsh)
+	}
+
+	// Lossless uninstall restores ~/.dsh/AGENTS.md byte-for-byte.
+	if _, err := Run(Options{Scope: ScopeGlobal, HomeDir: home, Uninstall: true}); err != nil {
+		t.Fatalf("Uninstall ~/.dsh/AGENTS.md failed: %v", err)
+	}
+	if restored := mustReadFile(t, dshAgentsPath); !bytes.Equal(restored, origDshNotes) {
+		t.Fatalf("~/.dsh/AGENTS.md not restored byte-for-byte:\ngot: %q\nwant: %q", restored, origDshNotes)
+	}
+
+	// 2. Respects $DSH_HOME (including tilde expansion ~/custom-dsh).
+	customDir := filepath.Join(home, "custom-dsh")
+	mustMkdirAll(t, customDir)
+	sumCustom, err := Run(Options{
+		Scope:   ScopeGlobal,
+		HomeDir: home,
+		DSHHome: "~/custom-dsh",
+		Agents:  []string{"dsh"},
+	})
+	if err != nil {
+		t.Fatalf("Run with DSHHome failed: %v", err)
+	}
+	if sumCustom.ActiveCount != 1 {
+		t.Fatalf("ActiveCount = %d, want 1", sumCustom.ActiveCount)
+	}
+	customAgents := filepath.Join(customDir, "AGENTS.md")
+	assertFileExists(t, customAgents)
+	if !strings.Contains(string(mustReadFile(t, customAgents)), "--harness dsh") {
+		t.Fatalf("expected --harness dsh in %s", customAgents)
+	}
+
+	// 3. Project scope --agent dsh maps to AGENTS.md with --harness dsh.
+	projRoot := t.TempDir()
+	projSum, err := Run(Options{
+		Scope:       ScopeProject,
+		ProjectRoot: projRoot,
+		Agents:      []string{"dsh"},
+	})
+	if err != nil {
+		t.Fatalf("Run project --agent dsh failed: %v", err)
+	}
+	if projSum.ActiveCount != 1 || projSum.Results[0].DisplayName != "DeepSeek Harness" {
+		t.Fatalf("unexpected project dsh summary: %+v", projSum)
+	}
+	if !strings.Contains(string(mustReadFile(t, filepath.Join(projRoot, "AGENTS.md"))), "--harness dsh") {
+		t.Fatalf("expected --harness dsh in project AGENTS.md")
 	}
 }
 

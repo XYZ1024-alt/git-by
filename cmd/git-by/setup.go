@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,13 @@ import (
 	"github.com/XYZ1024-alt/git-by/internal/setup"
 )
 
+func (a *App) interactiveTTY() bool {
+	if a.isTTY != nil {
+		return a.isTTY()
+	}
+	return setup.IsTerminal(a.stdin) && setup.IsTerminal(a.stdout)
+}
+
 func (a *App) cmdSetup(args []string) int {
 	var (
 		hasGlobal  bool
@@ -18,6 +26,7 @@ func (a *App) cmdSetup(args []string) int {
 		uninstall  bool
 		dryRun     bool
 		noColor    bool
+		yes        bool
 	)
 
 	for i := 0; i < len(args); i++ {
@@ -36,6 +45,8 @@ func (a *App) cmdSetup(args []string) int {
 			dryRun = true
 		case tok == "--no-color":
 			noColor = true
+		case tok == "-y" || tok == "--yes":
+			yes = true
 		case tok == "--agent":
 			if i+1 >= len(args) {
 				fmt.Fprintln(a.stderr, "git-by setup: --agent requires a value")
@@ -102,6 +113,48 @@ func (a *App) cmdSetup(args []string) int {
 			return 1
 		}
 		opts.HomeDir = homeDir
+		if a.lookupEnv != nil {
+			if dshHome, ok := a.lookupEnv("DSH_HOME"); ok && strings.TrimSpace(dshHome) != "" {
+				opts.DSHHome = strings.TrimSpace(dshHome)
+			}
+		}
+	}
+
+	useColor := a.useColor(noColor)
+
+	if !yes && len(rawAgents) == 0 && a.interactiveTTY() {
+		items, err := setup.DiscoverPickerItems(opts)
+		if err != nil {
+			fmt.Fprintf(a.stderr, "git-by setup: %v\n", err)
+			return 1
+		}
+		selected, err := setup.RunPicker(setup.PickerConfig{
+			In:        a.stdin,
+			Out:       a.stdout,
+			Scope:     opts.Scope,
+			Uninstall: opts.Uninstall,
+			DryRun:    opts.DryRun,
+			Color:     useColor,
+			RawMode:   a.rawMode,
+		}, items)
+		if err != nil {
+			if errors.Is(err, setup.ErrInterrupted) {
+				fmt.Fprintln(a.stdout, "Setup cancelled; nothing changed.")
+				return 130
+			}
+			if errors.Is(err, setup.ErrCancelled) {
+				fmt.Fprintln(a.stdout, "Setup cancelled; nothing changed.")
+				return 0
+			}
+			fmt.Fprintf(a.stderr, "git-by setup: %v\n", err)
+			return 1
+		}
+		if len(selected) == 0 {
+			fmt.Fprintln(a.stdout, "No agents selected; nothing changed.")
+			return 0
+		}
+		opts.SelectedTargets = selected
+		opts.CreateMissingDirs = !opts.Uninstall
 	}
 
 	summary, err := setup.Run(opts)
@@ -110,7 +163,7 @@ func (a *App) cmdSetup(args []string) int {
 		return 1
 	}
 
-	if err := setup.RenderSummary(a.stdout, summary, a.useColor(noColor)); err != nil {
+	if err := setup.RenderSummary(a.stdout, summary, useColor); err != nil {
 		fmt.Fprintf(a.stderr, "git-by setup: %v\n", err)
 		return 1
 	}
@@ -138,16 +191,19 @@ func (a *App) resolveHomeDir() (string, error) {
 
 func (a *App) printSetupHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  git by setup [--global | --project] [--agent <names>] [--uninstall | --remove] [--dry-run] [--no-color] [-h | --help]
+  git by setup [--global | --project] [--agent <names>] [-y | --yes] [--uninstall | --remove] [--dry-run] [--no-color] [-h | --help]
 
-Auto-detects installed AI coding agents and idempotently injects or updates managed
-git-by provenance rules without creating directories for uninstalled tools.
+Configures managed git-by provenance rules across AI coding agents. In an interactive
+terminal, opens a multi-select agent picker (Space to toggle, Enter to confirm) with
+detected agents pre-selected; in non-TTY pipelines or with --yes / --agent, runs
+non-interactively without creating directories for uninstalled tools.
 
 Flags:
   --global             Configure global user-level agent rules (default)
-  --project            Configure repository-level rules (AGENTS.md + existing rule files)
+  --project            Configure repository-level rules (AGENTS.md + project rule files)
   --agent <names>      Target specific agent(s), repeatable or comma-separated:
-                       agy, pi, claude, codex, opencode, cursor, windsurf
+                       agy, pi, claude, codex, opencode, dsh, cursor, windsurf
+  -y, --yes            Skip interactive picker and auto-configure detected targets
   --uninstall          Remove managed git-by rule blocks and delete standalone rule files
   --remove             Alias for --uninstall
   --dry-run            Preview planned changes without writing to disk
