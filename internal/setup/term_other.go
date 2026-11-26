@@ -18,3 +18,7 @@ func enterRawMode(_ io.Reader, _ io.Writer) (func(), error) {
 func readEscapeTail(_ io.Reader, _ []byte) (int, bool) {
 	return 0, false
 }
+
+func termHeight(_ io.Writer) int {
+	return 0
+}

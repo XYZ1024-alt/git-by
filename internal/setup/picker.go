@@ -45,13 +45,14 @@ type PickerItem struct {
 
 // PickerConfig configures interactive multi-select checklist execution.
 type PickerConfig struct {
-	In        io.Reader
-	Out       io.Writer
-	Scope     Scope
-	Uninstall bool
-	DryRun    bool
-	Color     bool
-	RawMode   func() (restore func(), err error)
+	In         io.Reader
+	Out        io.Writer
+	Scope      Scope
+	Uninstall  bool
+	DryRun     bool
+	Color      bool
+	MaxVisible int // optional viewport row cap for items (0 auto-fits terminal height)
+	RawMode    func() (restore func(), err error)
 }
 
 // IsTerminal reports whether v is an *os.File attached to an interactive terminal.
@@ -85,15 +86,16 @@ func DiscoverPickerItems(opts Options) ([]PickerItem, error) {
 			return nil, fmt.Errorf("home directory %q does not exist", homeDir)
 		}
 
+		env := globalEnvFromOptions(opts)
 		items := make([]PickerItem, 0, len(defaultGlobalAgents))
 		for _, id := range defaultGlobalAgents {
-			explicitSpec, ok := resolveOneGlobalTargetWithDSH(homeDir, opts.DSHHome, id, true)
+			explicitSpec, ok := resolveOneGlobalTargetWithEnv(homeDir, env, id, true)
 			if !ok {
 				continue
 			}
-			autoSpec, autoInclude := resolveOneGlobalTargetWithDSH(homeDir, opts.DSHHome, id, false)
+			autoSpec, autoInclude := resolveOneGlobalTargetWithEnv(homeDir, env, id, false)
 			detected := autoInclude && autoSpec.skipReason == ""
-			configured := fileHasMarkers(explicitSpec.path)
+			configured := fileHasMarkers(explicitSpec.path) || (autoInclude && fileHasMarkers(autoSpec.path))
 
 			status := "not detected"
 			switch {
@@ -128,42 +130,53 @@ func DiscoverPickerItems(opts Options) ([]PickerItem, error) {
 			return nil, fmt.Errorf("project root %q does not exist", projectRoot)
 		}
 
-		defs := []struct {
-			id      string
-			label   string
-			relPath string
-		}{
-			{id: "agents", label: "AGENTS.md (shared standard)", relPath: "AGENTS.md"},
-			{id: "claude", label: "Claude Code (CLAUDE.md)", relPath: "CLAUDE.md"},
-			{id: "cursor", label: "Cursor (.cursorrules)", relPath: ".cursorrules"},
-			{id: "windsurf", label: "Windsurf (.windsurfrules)", relPath: ".windsurfrules"},
-		}
+		items := make([]PickerItem, 0, 1+len(projectDedicatedOrder))
 
-		items := make([]PickerItem, 0, len(defs))
-		for _, d := range defs {
-			fullPath := filepath.Join(projectRoot, d.relPath)
-			exists := fileExists(fullPath)
-			configured := fileHasMarkers(fullPath)
+		agentsFull := filepath.Join(projectRoot, "AGENTS.md")
+		agentsExists := fileExists(agentsFull)
+		agentsConfigured := fileHasMarkers(agentsFull)
+		agentsStatus := "not detected"
+		switch {
+		case agentsConfigured:
+			agentsStatus = "configured"
+		case agentsExists:
+			agentsStatus = "detected"
+		case !opts.Uninstall:
+			agentsStatus = "default"
+		}
+		agentsSelected := true
+		if opts.Uninstall {
+			agentsSelected = agentsConfigured
+		}
+		items = append(items, PickerItem{
+			ID:          "agents",
+			Label:       "AGENTS.md (shared standard)",
+			DisplayPath: "AGENTS.md",
+			Status:      agentsStatus,
+			Selected:    agentsSelected,
+		})
+
+		for _, id := range projectDedicatedOrder {
+			spec, label, detected := resolveProjectDedicatedTarget(projectRoot, id)
+			configured := fileHasMarkers(spec.path)
 
 			status := "not detected"
 			switch {
 			case configured:
 				status = "configured"
-			case exists:
+			case detected:
 				status = "detected"
-			case d.id == "agents" && !opts.Uninstall:
-				status = "default"
 			}
 
-			selected := d.id == "agents" || exists
+			selected := detected || configured
 			if opts.Uninstall {
 				selected = configured
 			}
 
 			items = append(items, PickerItem{
-				ID:          d.id,
-				Label:       d.label,
-				DisplayPath: d.relPath,
+				ID:          id,
+				Label:       label,
+				DisplayPath: spec.displayPath,
 				Status:      status,
 				Selected:    selected,
 			})
@@ -282,6 +295,27 @@ func needsMoreEscapeBytes(b []byte) bool {
 
 // RenderPickerLines renders the lines of a single multi-select picker frame.
 func RenderPickerLines(scope Scope, uninstall, dryRun, color bool, items []PickerItem, cursor int) []string {
+	return RenderPickerLinesWindowed(scope, uninstall, dryRun, color, items, cursor, 0)
+}
+
+func visibleWindow(total, cursor, maxVisible int) (start, end int) {
+	if maxVisible <= 0 || maxVisible >= total {
+		return 0, total
+	}
+	start = cursor - maxVisible/2
+	if start < 0 {
+		start = 0
+	}
+	if start+maxVisible > total {
+		start = total - maxVisible
+	}
+	return start, start + maxVisible
+}
+
+// RenderPickerLinesWindowed renders a picker frame, optionally windowing the item list to
+// maxVisible rows (when maxVisible > 0 and maxVisible < len(items)) so small terminal panes
+// never scroll past the top of the viewport.
+func RenderPickerLinesWindowed(scope Scope, uninstall, dryRun, color bool, items []PickerItem, cursor, maxVisible int) []string {
 	if scope == "" {
 		scope = ScopeGlobal
 	}
@@ -314,12 +348,13 @@ func RenderPickerLines(scope Scope, uninstall, dryRun, color bool, items []Picke
 		hint = wrapANSI(ansiDim, hint)
 	}
 
-	lines := make([]string, 0, len(items)+5)
-	lines = append(lines, header, hint, "")
-
 	labelWidth := 0
 	pathWidth := 0
+	selectedCount := 0
 	for _, it := range items {
+		if it.Selected {
+			selectedCount++
+		}
 		if n := utf8.RuneCountInString(it.Label); n > labelWidth {
 			labelWidth = n
 		}
@@ -328,11 +363,12 @@ func RenderPickerLines(scope Scope, uninstall, dryRun, color bool, items []Picke
 		}
 	}
 
-	selectedCount := 0
-	for i, it := range items {
-		if it.Selected {
-			selectedCount++
-		}
+	start, end := visibleWindow(len(items), cursor, maxVisible)
+	lines := make([]string, 0, (end-start)+5)
+	lines = append(lines, header, hint, "")
+
+	for i := start; i < end; i++ {
+		it := items[i]
 		focused := i == cursor
 
 		pointer := " "
@@ -394,6 +430,9 @@ func RenderPickerLines(scope Scope, uninstall, dryRun, color bool, items []Picke
 	}
 
 	footer := fmt.Sprintf("  %d of %d selected", selectedCount, len(items))
+	if end-start < len(items) {
+		footer += fmt.Sprintf("  (showing %d-%d of %d)", start+1, end, len(items))
+	}
 	if color {
 		footer = wrapANSI(ansiDim, footer)
 	}
@@ -448,7 +487,13 @@ func RunPicker(cfg PickerConfig, initialItems []PickerItem) ([]string, error) {
 
 	cursor := 0
 	draw := func() error {
-		lines := RenderPickerLines(cfg.Scope, cfg.Uninstall, cfg.DryRun, cfg.Color, items, cursor)
+		maxVis := cfg.MaxVisible
+		if maxVis <= 0 {
+			if h := termHeight(cfg.Out); h > 0 && len(items)+5 >= h {
+				maxVis = max(3, h-6)
+			}
+		}
+		lines := RenderPickerLinesWindowed(cfg.Scope, cfg.Uninstall, cfg.DryRun, cfg.Color, items, cursor, maxVis)
 		var buf bytes.Buffer
 		if renderedLines == 0 {
 			buf.WriteString("\x1b[?25l")

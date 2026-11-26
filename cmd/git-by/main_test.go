@@ -143,6 +143,13 @@ func (e *testEnv) applyProcessEnv(extra map[string]string) func(string) (string,
 		"NO_COLOR",
 		"DSH_HOME",
 		"DSH_AGENTS_HOME",
+		"PI_CODING_AGENT_DIR",
+		"OMP_CODING_AGENT_DIR",
+		"CODEX_HOME",
+		"COPILOT_HOME",
+		"CLINE_DIR",
+		"KIMI_CODE_HOME",
+		"HERMES_HOME",
 	} {
 		if _, exists := extra[k]; !exists {
 			e.t.Setenv(k, "")
@@ -945,7 +952,12 @@ func TestSetupProjectScopeSubdirAndValidationErrors(t *testing.T) {
 
 	// 4) Help & validation error cases.
 	helpSetup := env.mustRunApp(repo, nil, "help", "setup")
-	for _, flag := range []string{"--global", "--project", "--agent", "dsh", "--yes", "-y", "--uninstall", "--remove", "--dry-run"} {
+	for _, flag := range []string{
+		"--global", "--project", "--agent", "dsh", "omp", "gemini", "copilot", "cline",
+		"roo", "kilo", "droid", "amp", "goose", "crush", "kiro", "continue",
+		"trae", "augment", "qwen", "kimi", "codebuddy", "junie", "zed", "aider",
+		"openhands", "hermes", "--yes", "-y", "--uninstall", "--remove", "--dry-run",
+	} {
 		if !strings.Contains(helpSetup, flag) {
 			t.Fatalf("help setup missing %q:\n%s", flag, helpSetup)
 		}

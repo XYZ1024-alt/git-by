@@ -172,16 +172,20 @@ $ git by setup
 git-by setup (global)
   ↑/↓ move · Space select · a toggle all · Enter install · q/Esc cancel
 
-  > [x] Antigravity (agy)        ~/.gemini/config/rules/git-by.md  detected
-    [x] Pi Agent (pi)            ~/.pi/agent/APPEND_SYSTEM.md      detected
-    [x] Claude Code (claude)     ~/.claude/rules/git-by.md         detected
-    [ ] Codex (codex)            ~/.codex/AGENTS.md                not detected
-    [ ] OpenCode (opencode)      ~/.config/opencode/AGENTS.md      not detected
-    [ ] DeepSeek Harness (dsh)   ~/.dsh/AGENTS.md                  not detected
-    [ ] Cursor (cursor)          ~/.cursorrules                    not detected
-    [ ] Windsurf (windsurf)      ~/.windsurfrules                  not detected
+  > [x] Antigravity (agy)          ~/.gemini/config/rules/git-by.md      detected
+    [x] Pi Agent (pi)              ~/.pi/agent/APPEND_SYSTEM.md          detected
+    [x] Claude Code (claude)       ~/.claude/rules/git-by.md             detected
+    [ ] Codex (codex)              ~/.codex/AGENTS.md                    not detected
+    [ ] OpenCode (opencode)        ~/.config/opencode/AGENTS.md          not detected
+    [ ] DeepSeek Harness (dsh)     ~/.dsh/AGENTS.md                      not detected
+    [ ] Cursor (cursor)            ~/.cursorrules                        not detected
+    [ ] Windsurf (windsurf)        ~/.windsurfrules                      not detected
+    [ ] Oh My Pi (omp)             ~/.omp/agent/APPEND_SYSTEM.md         not detected
+    [ ] Gemini CLI (gemini)        ~/.gemini/GEMINI.md                   not detected
+    [ ] GitHub Copilot (copilot)   ~/.copilot/copilot-instructions.md    not detected
+    ... (30 mainstream harnesses supported)
 
-  3 of 8 selected
+  3 of 30 selected
 ```
 
 Pressing `Enter` applies the selected rules and prints the summary:
@@ -225,13 +229,15 @@ git by setup --global
 # Non-interactive auto-detection (skips picker; default automatically in pipes/CI)
 git by setup --yes
 
-# Repository scope: pick from AGENTS.md, CLAUDE.md, .cursorrules, .windsurfrules
+# Repository scope: pick from AGENTS.md, CLAUDE.md, GEMINI.md, .github/copilot-instructions.md, etc.
 # (or pass -y to update AGENTS.md + existing rule files without creating clutter)
 git by setup --project
 
 # Target specific agents non-interactively (comma-separated or repeatable):
-# agy, pi, claude, codex, opencode, dsh, cursor, windsurf
-git by setup --agent agy,claude,dsh,cursor
+# agy, pi, claude, codex, opencode, dsh, cursor, windsurf, omp, gemini, copilot,
+# cline, roo, kilo, droid, amp, goose, crush, kiro, continue, trae, augment,
+# qwen, kimi, codebuddy, junie, zed, aider, openhands, hermes
+git by setup --agent agy,claude,omp,codex,gemini,copilot,cursor
 
 # Preview planned actions with zero disk writes
 git by setup --dry-run
@@ -244,13 +250,17 @@ git by setup --project --remove -y
 
 | Flag | Behavior |
 | :--- | :--- |
-| *(default)* / `--global` | Opens the global multi-select agent picker on a TTY (detected agents pre-checked; checking any agent installs its rule file), or auto-configures detected agents (`~/.gemini`, `~/.pi`, `~/.claude`, `~/.codex`, `~/.config/opencode`, `~/.dsh` / `$DSH_HOME`, plus existing `~/.cursorrules` / `~/.windsurfrules`) in non-TTY mode |
-| `--project` | Opens the repository target picker on a TTY (`AGENTS.md` + existing rule files pre-checked), or injects into `AGENTS.md` + existing `CLAUDE.md` / `.cursorrules` / `.windsurfrules` in non-TTY mode |
-| `--agent <names>` | Bypass picker and filter target agents (`agy`, `pi`, `claude`, `codex`, `opencode`, `dsh`, `cursor`, `windsurf`) |
+| *(default)* / `--global` | Opens the global multi-select agent picker on a TTY (detected agents pre-checked; auto-scrolls in compact terminal panes), or auto-configures detected agents across all 30 mainstream harnesses (honoring `$PI_CODING_AGENT_DIR`, `$OMP_CODING_AGENT_DIR`, `$CODEX_HOME`, `$COPILOT_HOME`, `$CLINE_DIR`, `$DSH_HOME`, `$KIMI_CODE_HOME`, `$HERMES_HOME`) in non-TTY mode |
+| `--project` | Opens the repository target picker on a TTY (`AGENTS.md` + existing rule files pre-checked), or injects into `AGENTS.md` + existing project rule files (`CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.cursorrules`, `.windsurfrules`, `.clinerules/`, `.roo/rules/`, `.kiro/steering/`, etc.) in non-TTY mode |
+| `--agent <names>` | Bypass picker and filter target harnesses (`agy`, `pi`, `claude`, `codex`, `opencode`, `dsh`, `cursor`, `windsurf`, `omp`, `gemini`, `copilot`, `cline`, `roo`, `kilo`, `droid`, `amp`, `goose`, `crush`, `kiro`, `continue`, `trae`, `augment`, `qwen`, `kimi`, `codebuddy`, `junie`, `zed`, `aider`, `openhands`, `hermes`) |
 | `-y`, `--yes` | Bypass interactive picker on a TTY and auto-configure detected targets |
 | `--dry-run` | Preview `installed` / `updated` / `removed` / `skipped` targets with zero filesystem changes |
 | `--uninstall`, `--remove` | Delete standalone `git-by.md` rule files and losslessly restore shared files byte-for-byte |
 | `--no-color` | Disable ANSI color output |
+
+**Supported Mainstream Harnesses (30):**
+- **CLI Harnesses**: Antigravity (`agy`), Claude Code (`claude`), OpenAI Codex (`codex`), Gemini CLI (`gemini`), OpenCode (`opencode`), Pi Agent (`pi`), Oh My Pi (`omp`), DeepSeek Harness (`dsh`), Factory Droid (`droid`), Amp (`amp`), Goose (`goose`), Crush (`crush`), Qwen Code (`qwen`), Kimi Code (`kimi`), Aider (`aider`), OpenHands (`openhands`), Hermes Agent (`hermes`)
+- **AI IDEs & Editor Agents**: Cursor (`cursor`), Windsurf (`windsurf`), GitHub Copilot (`copilot`), Cline (`cline`), Roo Code (`roo`), Kilo Code (`kilo`), Kiro (`kiro`), Continue (`continue`), Trae (`trae`), Augment (`augment`), CodeBuddy (`codebuddy`), JetBrains Junie (`junie`), Zed (`zed`)
 
 #### Manual Inspection & Piping (`git by prompt` / `git by init-skill`)
 
@@ -529,16 +539,20 @@ $ git by setup
 git-by setup (global)
   ↑/↓ move · Space select · a toggle all · Enter install · q/Esc cancel
 
-  > [x] Antigravity (agy)        ~/.gemini/config/rules/git-by.md  detected
-    [x] Pi Agent (pi)            ~/.pi/agent/APPEND_SYSTEM.md      detected
-    [x] Claude Code (claude)     ~/.claude/rules/git-by.md         detected
-    [ ] Codex (codex)            ~/.codex/AGENTS.md                not detected
-    [ ] OpenCode (opencode)      ~/.config/opencode/AGENTS.md      not detected
-    [ ] DeepSeek Harness (dsh)   ~/.dsh/AGENTS.md                  not detected
-    [ ] Cursor (cursor)          ~/.cursorrules                    not detected
-    [ ] Windsurf (windsurf)      ~/.windsurfrules                  not detected
+  > [x] Antigravity (agy)          ~/.gemini/config/rules/git-by.md      detected
+    [x] Pi Agent (pi)              ~/.pi/agent/APPEND_SYSTEM.md          detected
+    [x] Claude Code (claude)       ~/.claude/rules/git-by.md             detected
+    [ ] Codex (codex)              ~/.codex/AGENTS.md                    not detected
+    [ ] OpenCode (opencode)        ~/.config/opencode/AGENTS.md          not detected
+    [ ] DeepSeek Harness (dsh)     ~/.dsh/AGENTS.md                      not detected
+    [ ] Cursor (cursor)            ~/.cursorrules                        not detected
+    [ ] Windsurf (windsurf)        ~/.windsurfrules                      not detected
+    [ ] Oh My Pi (omp)             ~/.omp/agent/APPEND_SYSTEM.md         not detected
+    [ ] Gemini CLI (gemini)        ~/.gemini/GEMINI.md                   not detected
+    [ ] GitHub Copilot (copilot)   ~/.copilot/copilot-instructions.md    not detected
+    ... (共支持 30 款主流 Harness)
 
-  3 of 8 selected
+  3 of 30 selected
 ```
 
 按 `Enter` 确认后即刻完成幂等写入：
@@ -582,13 +596,15 @@ git by setup --global
 # 非交互式自动检测（跳过选择面板；在管道与 CI 环境中也会自动启用）
 git by setup --yes
 
-# 仓库级接入：交互式选择 AGENTS.md / CLAUDE.md / .cursorrules / .windsurfrules
+# 仓库级接入：交互式选择 AGENTS.md / CLAUDE.md / GEMINI.md / .github/copilot-instructions.md 等
 # （传入 -y 则默认写入 AGENTS.md 并更新仓库内已存在的规则文件，不制造多余空文件）
 git by setup --project
 
 # 非交互式指定目标 Agent（支持逗号分隔或重复传参）：
-# agy, pi, claude, codex, opencode, dsh, cursor, windsurf
-git by setup --agent agy,claude,dsh,cursor
+# agy, pi, claude, codex, opencode, dsh, cursor, windsurf, omp, gemini, copilot,
+# cline, roo, kilo, droid, amp, goose, crush, kiro, continue, trae, augment,
+# qwen, kimi, codebuddy, junie, zed, aider, openhands, hermes
+git by setup --agent agy,claude,omp,codex,gemini,copilot,cursor
 
 # 预览即将执行的变更（零磁盘写入）
 git by setup --dry-run
@@ -600,13 +616,17 @@ git by setup --project --remove -y
 
 | 参数 | 行为说明 |
 | :--- | :--- |
-| *(默认)* / `--global` | 在终端 TTY 下打开全局 Agent 多选面板（已检测到的工具默认勾选，手动勾选任意 Agent 均会创建对应规则文件）；非交互模式下自动配置已检测到的工具（`~/.gemini`、`~/.pi`、`~/.claude`、`~/.codex`、`~/.config/opencode`、`~/.dsh` / `$DSH_HOME` 及已存在的 `~/.cursorrules` / `~/.windsurfrules`）且不创建多余目录 |
-| `--project` | 在终端 TTY 下打开仓库规则多选面板（默认勾选 `AGENTS.md` 与已存在的规则文件）；非交互模式下写入 `AGENTS.md` 并同步更新已存在的 `CLAUDE.md`、`.cursorrules`、`.windsurfrules` |
-| `--agent <names>` | 跳过交互面板并精确指定目标 Agent（支持 `agy`、`pi`、`claude`、`codex`、`opencode`、`dsh`、`cursor`、`windsurf`） |
+| *(默认)* / `--global` | 在终端 TTY 下打开全局 Agent 多选面板（已检测工具默认勾选，小窗口终端自动视口滚动）；非交互模式下自动检测并配置全部 30 款主流 Harness（原生兼容 `$PI_CODING_AGENT_DIR`、`$OMP_CODING_AGENT_DIR`、`$CODEX_HOME`、`$COPILOT_HOME`、`$CLINE_DIR`、`$DSH_HOME`、`$KIMI_CODE_HOME`、`$HERMES_HOME`），且不创建多余目录 |
+| `--project` | 在终端 TTY 下打开仓库规则多选面板（默认勾选 `AGENTS.md` 与已存在的规则文件）；非交互模式下写入 `AGENTS.md` 并同步更新已存在的项目级规则文件（`CLAUDE.md`、`GEMINI.md`、`.github/copilot-instructions.md`、`.cursorrules`、`.windsurfrules`、`.clinerules/`、`.roo/rules/`、`.kiro/steering/` 等） |
+| `--agent <names>` | 跳过交互面板并精确指定目标 Harness（支持 `agy`、`pi`、`claude`、`codex`、`opencode`、`dsh`、`cursor`、`windsurf`、`omp`、`gemini`、`copilot`、`cline`、`roo`、`kilo`、`droid`、`amp`、`goose`、`crush`、`kiro`、`continue`、`trae`、`augment`、`qwen`、`kimi`、`codebuddy`、`junie`、`zed`、`aider`、`openhands`、`hermes`） |
 | `-y`, `--yes` | 在终端 TTY 下跳过交互多选面板，直接按自动检测结果执行 |
 | `--dry-run` | 仅预览 `installed` / `updated` / `removed` / `skipped` 计划，零磁盘写入 |
 | `--uninstall`, `--remove` | 删除独立的 `git-by.md` 规则文件，并从共享配置文件中按字节无损剥离 `git-by` 规则块 |
 | `--no-color` | 禁用终端 ANSI 颜色输出 |
+
+**内置支持的 30 款主流 Harness：**
+- **CLI 智能体宿主**：Antigravity (`agy`)、Claude Code (`claude`)、OpenAI Codex (`codex`)、Gemini CLI (`gemini`)、OpenCode (`opencode`)、Pi Agent (`pi`)、Oh My Pi (`omp`)、DeepSeek Harness (`dsh`)、Factory Droid (`droid`)、Amp (`amp`)、Goose (`goose`)、Crush (`crush`)、Qwen Code (`qwen`)、Kimi Code (`kimi`)、Aider (`aider`)、OpenHands (`openhands`)、Hermes Agent (`hermes`)
+- **AI IDE 与编辑器扩展**：Cursor (`cursor`)、Windsurf (`windsurf`)、GitHub Copilot (`copilot`)、Cline (`cline`)、Roo Code (`roo`)、Kilo Code (`kilo`)、Kiro (`kiro`)、Continue (`continue`)、Trae (`trae`)、Augment (`augment`)、CodeBuddy (`codebuddy`)、JetBrains Junie (`junie`)、Zed (`zed`)
 
 #### 手动查看与管道重定向（`git by prompt` / `git by init-skill`）
 

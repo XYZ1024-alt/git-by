@@ -114,9 +114,20 @@ func (a *App) cmdSetup(args []string) int {
 		}
 		opts.HomeDir = homeDir
 		if a.lookupEnv != nil {
-			if dshHome, ok := a.lookupEnv("DSH_HOME"); ok && strings.TrimSpace(dshHome) != "" {
-				opts.DSHHome = strings.TrimSpace(dshHome)
+			envTrim := func(key string) string {
+				if v, ok := a.lookupEnv(key); ok {
+					return strings.TrimSpace(v)
+				}
+				return ""
 			}
+			opts.DSHHome = envTrim("DSH_HOME")
+			opts.PiAgentDir = envTrim("PI_CODING_AGENT_DIR")
+			opts.OmpAgentDir = envTrim("OMP_CODING_AGENT_DIR")
+			opts.CodexHome = envTrim("CODEX_HOME")
+			opts.CopilotHome = envTrim("COPILOT_HOME")
+			opts.ClineDir = envTrim("CLINE_DIR")
+			opts.KimiHome = envTrim("KIMI_CODE_HOME")
+			opts.HermesHome = envTrim("HERMES_HOME")
 		}
 	}
 
@@ -202,7 +213,10 @@ Flags:
   --global             Configure global user-level agent rules (default)
   --project            Configure repository-level rules (AGENTS.md + project rule files)
   --agent <names>      Target specific agent(s), repeatable or comma-separated:
-                       agy, pi, claude, codex, opencode, dsh, cursor, windsurf
+                       agy, pi, claude, codex, opencode, dsh, cursor, windsurf,
+                       omp, gemini, copilot, cline, roo, kilo, droid, amp, goose,
+                       crush, kiro, continue, trae, augment, qwen, kimi,
+                       codebuddy, junie, zed, aider, openhands, hermes
   -y, --yes            Skip interactive picker and auto-configure detected targets
   --uninstall          Remove managed git-by rule blocks and delete standalone rule files
   --remove             Alias for --uninstall

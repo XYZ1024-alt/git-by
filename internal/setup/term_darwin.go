@@ -95,3 +95,23 @@ func ioctlSetTermios(fd int, t *syscall.Termios) error {
 	}
 	return nil
 }
+
+type winsize struct {
+	Row    uint16
+	Col    uint16
+	Xpixel uint16
+	Ypixel uint16
+}
+
+func termHeight(out io.Writer) int {
+	f, ok := out.(*os.File)
+	if !ok || f == nil {
+		return 0
+	}
+	var ws winsize
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws)))
+	if errno != 0 {
+		return 0
+	}
+	return int(ws.Row)
+}

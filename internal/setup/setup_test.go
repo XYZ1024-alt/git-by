@@ -47,14 +47,18 @@ func TestParseAgents(t *testing.T) {
 	}
 
 	got, err = ParseAgents([]string{
-		" Antigravity , pi-agent ",
-		"CLAUDE-CODE,openai-codex,opencode,DEEPSEEK-HARNESS",
-		"agy,dsh,Cursor,WINDSURF,claude",
+		" Antigravity , pi-agent, pi-coding-agent ",
+		"CLAUDE-CODE,openai-codex,codex-cli,open-code,DEEPSEEK-HARNESS",
+		"agy,dsh,Cursor,codeium-windsurf,oh-my-pi,omp,claude,gemini-cli,github-copilot,gh-copilot,copilot-cli",
+		"cline,roo-code,roocode,roo-cline,kilocode,kilo-code,factory,factory-droid",
+		"ampcode,amp-code,block-goose,charm-crush,kiro-cli,aws-kiro,continue-dev,cn",
+		"trae-ide,auggie,augment-code,qwen-code,kimi-code,kimi-cli,codebuddy-code,tencent-codebuddy",
+		"jetbrains-junie,zed-editor,aider,open-hands,hermes-agent",
 	})
 	if err != nil {
 		t.Fatalf("ParseAgents unexpected error: %v", err)
 	}
-	want := []string{"agy", "pi", "claude", "codex", "opencode", "dsh", "cursor", "windsurf"}
+	want := SupportedAgentIDs()
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ParseAgents = %v, want %v", got, want)
 	}
@@ -66,7 +70,7 @@ func TestParseAgents(t *testing.T) {
 		{",pi"},
 		{"agy,,pi"},
 		{"unknown-agent"},
-		{"agy,copilot"},
+		{"agy,not-a-real-harness"},
 	}
 	for _, raw := range invalidInputs {
 		if _, err := ParseAgents(raw); err == nil {
@@ -101,14 +105,20 @@ func TestGlobalAutoDetectionSafetyAndRoundtrip(t *testing.T) {
 	if drySummary.ActiveCount != 3 {
 		t.Fatalf("DryRun ActiveCount = %d, want 3", drySummary.ActiveCount)
 	}
-	if len(drySummary.Results) != 6 {
-		t.Fatalf("DryRun len(Results) = %d, want 6", len(drySummary.Results))
+	wantAutoResults := len(SupportedAgentIDs()) - 2 // all global harnesses except cursor/windsurf dotfiles
+	if len(drySummary.Results) != wantAutoResults {
+		t.Fatalf("DryRun len(Results) = %d, want %d", len(drySummary.Results), wantAutoResults)
 	}
 	assertNotExists(t, filepath.Join(home, ".gemini", "config"))
+	assertNotExists(t, filepath.Join(home, ".gemini", "GEMINI.md"))
 	assertNotExists(t, filepath.Join(home, ".claude", "rules"))
 	assertNotExists(t, filepath.Join(home, ".codex"))
 	assertNotExists(t, filepath.Join(home, ".config"))
 	assertNotExists(t, filepath.Join(home, ".dsh"))
+	assertNotExists(t, filepath.Join(home, ".copilot"))
+	assertNotExists(t, filepath.Join(home, ".cline"))
+	assertNotExists(t, filepath.Join(home, ".roo"))
+	assertNotExists(t, filepath.Join(home, ".kilocode"))
 	if gotPi := mustReadFile(t, piPath); !bytes.Equal(gotPi, origPiContent) {
 		t.Fatalf("DryRun mutated %s", piPath)
 	}
@@ -138,6 +148,28 @@ func TestGlobalAutoDetectionSafetyAndRoundtrip(t *testing.T) {
 		"  - Codex              skipped     (~/.codex not found)",
 		"  - OpenCode           skipped     (~/.config/opencode not found)",
 		"  - DeepSeek Harness   skipped     (~/.dsh not found)",
+		"  - Oh My Pi           skipped     (~/.omp not found)",
+		"  - Gemini CLI         skipped     (~/.gemini/settings.json not found)",
+		"  - GitHub Copilot     skipped     (~/.copilot not found)",
+		"  - Cline              skipped     (~/.cline not found)",
+		"  - Roo Code           skipped     (~/.roo not found)",
+		"  - Kilo Code          skipped     (~/.kilocode not found)",
+		"  - Factory Droid      skipped     (~/.factory not found)",
+		"  - Amp                skipped     (~/.config/amp not found)",
+		"  - Goose              skipped     (~/.config/goose not found)",
+		"  - Crush              skipped     (~/.config/crush not found)",
+		"  - Kiro               skipped     (~/.kiro not found)",
+		"  - Continue           skipped     (~/.continue not found)",
+		"  - Trae               skipped     (~/.trae not found)",
+		"  - Augment            skipped     (~/.augment not found)",
+		"  - Qwen Code          skipped     (~/.qwen not found)",
+		"  - Kimi Code          skipped     (~/.kimi-code not found)",
+		"  - CodeBuddy          skipped     (~/.codebuddy not found)",
+		"  - Junie              skipped     (~/.junie not found)",
+		"  - Zed                skipped     (~/.config/zed not found)",
+		"  - Aider              skipped     (~/.aider not found)",
+		"  - OpenHands          skipped     (~/.openhands not found)",
+		"  - Hermes Agent       skipped     (~/.hermes not found)",
 		"",
 		"Configured 3 agent(s). Your AI commits will now carry provenance automatically.",
 		"",
@@ -430,8 +462,8 @@ func TestGlobalCursorAndWindsurfDetectionAndExplicitFilter(t *testing.T) {
 		if err != nil {
 			t.Fatalf("auto-scan failed: %v", err)
 		}
-		if len(autoSum.Results) != 8 {
-			t.Fatalf("expected 8 targets in auto-scan when cursor+windsurf rules exist, got %d", len(autoSum.Results))
+		if len(autoSum.Results) != len(SupportedAgentIDs()) {
+			t.Fatalf("expected %d targets in auto-scan when cursor+windsurf rules exist, got %d", len(SupportedAgentIDs()), len(autoSum.Results))
 		}
 
 		// Auto-scan uninstall removes both dot-files completely since they have no user content.
@@ -630,6 +662,234 @@ func TestDeepSeekHarnessGlobalDSHHomeAndProjectMapping(t *testing.T) {
 	if !strings.Contains(string(mustReadFile(t, filepath.Join(projRoot, "AGENTS.md"))), "--harness dsh") {
 		t.Fatalf("expected --harness dsh in project AGENTS.md")
 	}
+}
+
+func TestAllMainstreamHarnessesGlobalAndProjectRoundtrip(t *testing.T) {
+	t.Parallel()
+
+	t.Run("global_all_harnesses_install_and_lossless_uninstall", func(t *testing.T) {
+		t.Parallel()
+		home := t.TempDir()
+
+		// Simulate Gemini CLI marker + user content in a few shared global files to verify lossless roundtrip.
+		mustWriteFile(t, filepath.Join(home, ".gemini", "settings.json"), []byte("{}\n"), 0o644)
+		origCopilot := []byte("# Personal Copilot Rules\n\n- Prefer small PRs.\n")
+		mustWriteFile(t, filepath.Join(home, ".copilot", "copilot-instructions.md"), origCopilot, 0o644)
+		origGoose := []byte("# Personal Goose Hints\n\n- Run tests first.\n")
+		mustWriteFile(t, filepath.Join(home, ".config", "goose", ".goosehints"), origGoose, 0o644)
+		origHermes := []byte("# Hermes Soul\n\n- Be direct and precise.\n")
+		mustWriteFile(t, filepath.Join(home, ".hermes", "SOUL.md"), origHermes, 0o644)
+
+		allIDs := SupportedAgentIDs()
+		// Interactive selection installs all 29 harnesses even when directories were absent!
+		sum, err := Run(Options{
+			Scope:             ScopeGlobal,
+			HomeDir:           home,
+			SelectedTargets:   allIDs,
+			CreateMissingDirs: true,
+		})
+		if err != nil {
+			t.Fatalf("install all harnesses failed: %v", err)
+		}
+		if sum.ActiveCount != len(allIDs) {
+			t.Fatalf("ActiveCount = %d, want %d", sum.ActiveCount, len(allIDs))
+		}
+
+		expectedGlobal := []struct {
+			id      string
+			rel     string
+			harness string
+		}{
+			{"agy", ".gemini/config/rules/git-by.md", "antigravity"},
+			{"pi", ".pi/agent/APPEND_SYSTEM.md", "pi"},
+			{"claude", ".claude/rules/git-by.md", "claude-code"},
+			{"codex", ".codex/AGENTS.md", "codex"},
+			{"opencode", ".config/opencode/AGENTS.md", "opencode"},
+			{"dsh", ".dsh/AGENTS.md", "dsh"},
+			{"cursor", ".cursorrules", "cursor"},
+			{"windsurf", ".windsurfrules", "windsurf"},
+			{"omp", ".omp/agent/APPEND_SYSTEM.md", "omp"},
+			{"gemini", ".gemini/GEMINI.md", "gemini-cli"},
+			{"copilot", ".copilot/copilot-instructions.md", "copilot"},
+			{"cline", ".cline/rules/git-by.md", "cline"},
+			{"roo", ".roo/rules/git-by.md", "roo-code"},
+			{"kilo", ".kilocode/rules/git-by.md", "kilocode"},
+			{"droid", ".factory/AGENTS.md", "droid"},
+			{"amp", ".config/amp/AGENTS.md", "amp"},
+			{"goose", ".config/goose/.goosehints", "goose"},
+			{"crush", ".config/crush/CRUSH.md", "crush"},
+			{"kiro", ".kiro/steering/git-by.md", "kiro"},
+			{"continue", ".continue/rules/git-by.md", "continue"},
+			{"trae", ".trae/user_rules.md", "trae"},
+			{"augment", ".augment/rules/git-by.md", "augment"},
+			{"qwen", ".qwen/QWEN.md", "qwen-code"},
+			{"kimi", ".kimi-code/AGENTS.md", "kimi-code"},
+			{"codebuddy", ".codebuddy/rules/git-by.md", "codebuddy"},
+			{"junie", ".junie/AGENTS.md", "junie"},
+			{"zed", ".config/zed/AGENTS.md", "zed"},
+			{"aider", ".aider/CONVENTIONS.md", "aider"},
+			{"openhands", ".openhands/microagents/git-by.md", "openhands"},
+			{"hermes", ".hermes/SOUL.md", "hermes"},
+		}
+
+		for _, exp := range expectedGlobal {
+			full := filepath.Join(home, filepath.FromSlash(exp.rel))
+			assertFileExists(t, full)
+			got := string(mustReadFile(t, full))
+			if !strings.Contains(got, "--harness "+exp.harness) {
+				t.Fatalf("agent %s (%s) missing '--harness %s':\n%s", exp.id, exp.rel, exp.harness, got)
+			}
+		}
+
+		// Auto-scan uninstall removes all 29 targets and restores pre-existing shared files byte-for-byte!
+		unSum, err := Run(Options{
+			Scope:     ScopeGlobal,
+			HomeDir:   home,
+			Uninstall: true,
+		})
+		if err != nil {
+			t.Fatalf("uninstall all harnesses failed: %v", err)
+		}
+		if unSum.ActiveCount != len(allIDs) {
+			t.Fatalf("uninstall ActiveCount = %d, want %d", unSum.ActiveCount, len(allIDs))
+		}
+		if got := mustReadFile(t, filepath.Join(home, ".copilot", "copilot-instructions.md")); !bytes.Equal(got, origCopilot) {
+			t.Fatalf("copilot-instructions.md not restored byte-for-byte")
+		}
+		if got := mustReadFile(t, filepath.Join(home, ".config", "goose", ".goosehints")); !bytes.Equal(got, origGoose) {
+			t.Fatalf(".goosehints not restored byte-for-byte")
+		}
+		if got := mustReadFile(t, filepath.Join(home, ".hermes", "SOUL.md")); !bytes.Equal(got, origHermes) {
+			t.Fatalf("SOUL.md not restored byte-for-byte")
+		}
+		for _, standalone := range []string{
+			".cline/rules/git-by.md",
+			".roo/rules/git-by.md",
+			".kilocode/rules/git-by.md",
+			".kiro/steering/git-by.md",
+			".continue/rules/git-by.md",
+			".augment/rules/git-by.md",
+			".codebuddy/rules/git-by.md",
+			".openhands/microagents/git-by.md",
+		} {
+			assertNotExists(t, filepath.Join(home, filepath.FromSlash(standalone)))
+		}
+	})
+
+	t.Run("alternate_global_paths_and_env_overrides", func(t *testing.T) {
+		t.Parallel()
+		home := t.TempDir()
+
+		// Classic Cline ~/Documents/Cline, modern Kilo ~/.config/kilo, legacy Kimi ~/.kimi,
+		// Trae directory ~/.trae/user_rules/, Junie legacy ~/.junie/guidelines.md, plus env overrides.
+		mustMkdirAll(t, filepath.Join(home, "Documents", "Cline"))
+		mustMkdirAll(t, filepath.Join(home, ".config", "kilo"))
+		mustMkdirAll(t, filepath.Join(home, ".kimi"))
+		mustMkdirAll(t, filepath.Join(home, ".trae", "user_rules"))
+		mustWriteFile(t, filepath.Join(home, ".junie", "guidelines.md"), []byte("# Junie\n"), 0o644)
+		mustMkdirAll(t, filepath.Join(home, "custom-codex"))
+		mustMkdirAll(t, filepath.Join(home, "custom-copilot"))
+		mustMkdirAll(t, filepath.Join(home, "custom-hermes"))
+		mustMkdirAll(t, filepath.Join(home, "custom-omp", "agent"))
+		mustMkdirAll(t, filepath.Join(home, "custom-pi", "agent"))
+
+		sum, err := Run(Options{
+			Scope:       ScopeGlobal,
+			HomeDir:     home,
+			PiAgentDir:  "~/custom-pi/agent",
+			OmpAgentDir: "~/custom-omp/agent",
+			CodexHome:   "~/custom-codex",
+			CopilotHome: "~/custom-copilot",
+			HermesHome:  "~/custom-hermes",
+			Agents:      []string{"cline", "kilo", "kimi", "trae", "junie", "codex", "copilot", "hermes", "omp", "pi"},
+		})
+		if err != nil {
+			t.Fatalf("alternate global paths Run failed: %v", err)
+		}
+		if sum.ActiveCount != 10 {
+			t.Fatalf("ActiveCount = %d, want 10", sum.ActiveCount)
+		}
+		assertFileExists(t, filepath.Join(home, "Documents", "Cline", "Rules", "git-by.md"))
+		assertFileExists(t, filepath.Join(home, ".config", "kilo", "AGENTS.md"))
+		assertFileExists(t, filepath.Join(home, ".kimi", "AGENTS.md"))
+		assertFileExists(t, filepath.Join(home, ".trae", "user_rules", "user_rules.md"))
+		assertFileExists(t, filepath.Join(home, ".junie", "guidelines.md"))
+		assertFileExists(t, filepath.Join(home, "custom-codex", "AGENTS.md"))
+		assertFileExists(t, filepath.Join(home, "custom-copilot", "copilot-instructions.md"))
+		assertFileExists(t, filepath.Join(home, "custom-hermes", "SOUL.md"))
+		assertFileExists(t, filepath.Join(home, "custom-omp", "agent", "APPEND_SYSTEM.md"))
+		assertFileExists(t, filepath.Join(home, "custom-pi", "agent", "APPEND_SYSTEM.md"))
+	})
+
+	t.Run("project_scope_all_dedicated_and_agents_md_mappings", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+
+		// .github/workflows existing MUST NOT falsely trigger GitHub Copilot auto-detection!
+		mustWriteFile(t, filepath.Join(root, ".github", "workflows", "ci.yml"), []byte("name: ci\n"), 0o644)
+		// Existing .kiro/steering/product.md SHOULD trigger Kiro auto-detection!
+		mustWriteFile(t, filepath.Join(root, ".kiro", "steering", "product.md"), []byte("# Product\n"), 0o644)
+
+		autoSum, err := Run(Options{Scope: ScopeProject, ProjectRoot: root})
+		if err != nil {
+			t.Fatalf("project auto Run failed: %v", err)
+		}
+		if autoSum.ActiveCount != 2 {
+			t.Fatalf("expected 2 targets (AGENTS.md + Kiro), got %d: %+v", autoSum.ActiveCount, autoSum.Results)
+		}
+		assertNotExists(t, filepath.Join(root, ".github", "copilot-instructions.md"))
+		assertFileExists(t, filepath.Join(root, ".kiro", "steering", "git-by.md"))
+
+		// Explicit dedicated project targets + single AGENTS.md-mapped target (droid).
+		expSum, err := Run(Options{
+			Scope:       ScopeProject,
+			ProjectRoot: root,
+			Agents: []string{
+				"droid", "gemini", "copilot", "cline", "roo", "kilo", "goose",
+				"crush", "continue", "trae", "augment", "qwen", "codebuddy", "junie", "zed", "aider",
+			},
+		})
+		if err != nil {
+			t.Fatalf("project explicit Run failed: %v", err)
+		}
+		if expSum.ActiveCount != 16 {
+			t.Fatalf("ActiveCount = %d, want 16", expSum.ActiveCount)
+		}
+		if !strings.Contains(string(mustReadFile(t, filepath.Join(root, "AGENTS.md"))), "--harness droid") {
+			t.Fatalf("expected --harness droid in AGENTS.md")
+		}
+		for _, rel := range []string{
+			"GEMINI.md",
+			".github/copilot-instructions.md",
+			".clinerules/git-by.md",
+			".roo/rules/git-by.md",
+			".kilocode/rules/git-by.md",
+			".goosehints",
+			"CRUSH.md",
+			".continue/rules/git-by.md",
+			".trae/rules/git-by.md",
+			".augment/rules/git-by.md",
+			"QWEN.md",
+			"CODEBUDDY.md",
+			".junie/guidelines.md",
+			".rules",
+			"CONVENTIONS.md",
+		} {
+			assertFileExists(t, filepath.Join(root, filepath.FromSlash(rel)))
+		}
+
+		// Project uninstall removes all 17 configured targets cleanly!
+		unSum, err := Run(Options{Scope: ScopeProject, ProjectRoot: root, Uninstall: true})
+		if err != nil {
+			t.Fatalf("project uninstall failed: %v", err)
+		}
+		if unSum.ActiveCount != 17 {
+			t.Fatalf("project uninstall ActiveCount = %d, want 17", unSum.ActiveCount)
+		}
+		assertNotExists(t, filepath.Join(root, ".github", "copilot-instructions.md"))
+		assertNotExists(t, filepath.Join(root, ".kiro", "steering", "git-by.md"))
+		assertFileExists(t, filepath.Join(root, ".kiro", "steering", "product.md"))
+	})
 }
 
 func TestValidationErrors(t *testing.T) {

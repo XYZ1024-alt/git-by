@@ -93,8 +93,8 @@ func TestDiscoverPickerItemsPreselectionGlobalProjectAndUninstall(t *testing.T) 
 		if err != nil {
 			t.Fatalf("DiscoverPickerItems global install: %v", err)
 		}
-		if len(installItems) != 8 {
-			t.Fatalf("expected all 8 global agents, got %d", len(installItems))
+		if len(installItems) != len(SupportedAgentIDs()) {
+			t.Fatalf("expected all %d global agents, got %d", len(SupportedAgentIDs()), len(installItems))
 		}
 
 		gotSelected := make(map[string]bool, len(installItems))
@@ -104,20 +104,21 @@ func TestDiscoverPickerItemsPreselectionGlobalProjectAndUninstall(t *testing.T) 
 			gotStatus[it.ID] = it.Status
 		}
 
-		wantInstallSelected := map[string]bool{
-			"agy":      true,
-			"pi":       false,
-			"claude":   true,
-			"codex":    false,
-			"opencode": false,
-			"dsh":      true,
-			"cursor":   true,
-			"windsurf": false,
+		wantInstallSelected := make(map[string]bool, len(SupportedAgentIDs()))
+		for _, id := range SupportedAgentIDs() {
+			wantInstallSelected[id] = false
 		}
+		wantInstallSelected["agy"] = true
+		wantInstallSelected["claude"] = true
+		wantInstallSelected["dsh"] = true
+		wantInstallSelected["cursor"] = true
+
 		if !reflect.DeepEqual(gotSelected, wantInstallSelected) {
 			t.Fatalf("global install pre-selection = %v, want %v", gotSelected, wantInstallSelected)
 		}
-		if gotStatus["agy"] != "detected" || gotStatus["dsh"] != "detected" || gotStatus["claude"] != "configured" || gotStatus["codex"] != "not detected" {
+		if gotStatus["agy"] != "detected" || gotStatus["dsh"] != "detected" ||
+			gotStatus["claude"] != "configured" || gotStatus["codex"] != "not detected" ||
+			gotStatus["gemini"] != "not detected" {
 			t.Fatalf("unexpected statuses: %v", gotStatus)
 		}
 
@@ -134,16 +135,11 @@ func TestDiscoverPickerItemsPreselectionGlobalProjectAndUninstall(t *testing.T) 
 		for _, it := range uninstallItems {
 			gotUninstallSelected[it.ID] = it.Selected
 		}
-		wantUninstallSelected := map[string]bool{
-			"agy":      false,
-			"pi":       false,
-			"claude":   true,
-			"codex":    false,
-			"opencode": false,
-			"dsh":      false,
-			"cursor":   false,
-			"windsurf": false,
+		wantUninstallSelected := make(map[string]bool, len(SupportedAgentIDs()))
+		for _, id := range SupportedAgentIDs() {
+			wantUninstallSelected[id] = false
 		}
+		wantUninstallSelected["claude"] = true
 		if !reflect.DeepEqual(gotUninstallSelected, wantUninstallSelected) {
 			t.Fatalf("global uninstall pre-selection = %v, want %v", gotUninstallSelected, wantUninstallSelected)
 		}
@@ -153,7 +149,7 @@ func TestDiscoverPickerItemsPreselectionGlobalProjectAndUninstall(t *testing.T) 
 		t.Parallel()
 		root := t.TempDir()
 
-		// Existing unconfigured CLAUDE.md + existing configured .cursorrules; AGENTS.md and .windsurfrules absent.
+		// Existing unconfigured CLAUDE.md + existing configured .cursorrules; AGENTS.md and others absent.
 		mustWriteFile(t, filepath.Join(root, "CLAUDE.md"), []byte("# Claude\n"), 0o644)
 		mustWriteFile(t, filepath.Join(root, ".cursorrules"), []byte(RenderManagedBlock("cursor")+"\n"), 0o644)
 
@@ -164,27 +160,30 @@ func TestDiscoverPickerItemsPreselectionGlobalProjectAndUninstall(t *testing.T) 
 		if err != nil {
 			t.Fatalf("DiscoverPickerItems project install: %v", err)
 		}
-		if len(projItems) != 4 {
-			t.Fatalf("expected 4 project targets, got %d", len(projItems))
+		wantProjCount := 1 + len(projectDedicatedOrder)
+		if len(projItems) != wantProjCount {
+			t.Fatalf("expected %d project targets, got %d", wantProjCount, len(projItems))
 		}
 
-		gotProjSel := make(map[string]bool, 4)
-		gotProjStatus := make(map[string]string, 4)
+		gotProjSel := make(map[string]bool, wantProjCount)
+		gotProjStatus := make(map[string]string, wantProjCount)
 		for _, it := range projItems {
 			gotProjSel[it.ID] = it.Selected
 			gotProjStatus[it.ID] = it.Status
 		}
-		wantProjSel := map[string]bool{
-			"agents":   true,
-			"claude":   true,
-			"cursor":   true,
-			"windsurf": false,
+		wantProjSel := make(map[string]bool, wantProjCount)
+		wantProjSel["agents"] = true
+		for _, id := range projectDedicatedOrder {
+			wantProjSel[id] = false
 		}
+		wantProjSel["claude"] = true
+		wantProjSel["cursor"] = true
 		if !reflect.DeepEqual(gotProjSel, wantProjSel) {
 			t.Fatalf("project install pre-selection = %v, want %v", gotProjSel, wantProjSel)
 		}
 		if gotProjStatus["agents"] != "default" || gotProjStatus["claude"] != "detected" ||
-			gotProjStatus["cursor"] != "configured" || gotProjStatus["windsurf"] != "not detected" {
+			gotProjStatus["cursor"] != "configured" || gotProjStatus["windsurf"] != "not detected" ||
+			gotProjStatus["copilot"] != "not detected" {
 			t.Fatalf("unexpected project statuses: %v", gotProjStatus)
 		}
 
@@ -196,16 +195,16 @@ func TestDiscoverPickerItemsPreselectionGlobalProjectAndUninstall(t *testing.T) 
 		if err != nil {
 			t.Fatalf("DiscoverPickerItems project uninstall: %v", err)
 		}
-		gotUninstallSel := make(map[string]bool, 4)
+		gotUninstallSel := make(map[string]bool, wantProjCount)
 		for _, it := range projUninstall {
 			gotUninstallSel[it.ID] = it.Selected
 		}
-		wantUninstallSel := map[string]bool{
-			"agents":   false,
-			"claude":   false,
-			"cursor":   true,
-			"windsurf": false,
+		wantUninstallSel := make(map[string]bool, wantProjCount)
+		wantUninstallSel["agents"] = false
+		for _, id := range projectDedicatedOrder {
+			wantUninstallSel[id] = false
 		}
+		wantUninstallSel["cursor"] = true
 		if !reflect.DeepEqual(gotUninstallSel, wantUninstallSel) {
 			t.Fatalf("project uninstall pre-selection = %v, want %v", gotUninstallSel, wantUninstallSel)
 		}
@@ -417,5 +416,47 @@ func TestIsTerminalNonTerminalValues(t *testing.T) {
 	defer tmpFile.Close()
 	if IsTerminal(tmpFile) {
 		t.Fatal("IsTerminal(regular file) = true, want false")
+	}
+}
+
+func TestPickerViewportWindowing(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	items, err := DiscoverPickerItems(Options{Scope: ScopeGlobal, HomeDir: home})
+	if err != nil {
+		t.Fatalf("DiscoverPickerItems: %v", err)
+	}
+
+	// Render with maxVisible=6 at top (cursor=0), middle (cursor=14), and bottom (cursor=len-1).
+	topLines := RenderPickerLinesWindowed(ScopeGlobal, false, false, false, items, 0, 6)
+	midLines := RenderPickerLinesWindowed(ScopeGlobal, false, false, false, items, 14, 6)
+	botLines := RenderPickerLinesWindowed(ScopeGlobal, false, false, false, items, len(items)-1, 6)
+
+	// Constant line height (6 visible items + 5 chrome lines = 11) prevents cursor-up drift!
+	if len(topLines) != 11 || len(midLines) != 11 || len(botLines) != 11 {
+		t.Fatalf("expected constant 11 lines across frames, got top=%d mid=%d bot=%d",
+			len(topLines), len(midLines), len(botLines))
+	}
+	if !strings.Contains(topLines[len(topLines)-1], "(showing 1-6 of 30)") {
+		t.Fatalf("unexpected top footer: %q", topLines[len(topLines)-1])
+	}
+	if !strings.Contains(botLines[len(botLines)-1], "(showing 25-30 of 30)") {
+		t.Fatalf("unexpected bottom footer: %q", botLines[len(botLines)-1])
+	}
+
+	// Exercise RunPicker with MaxVisible=5: press Up (wraps to last item: hermes), Space, Enter!
+	var out bytes.Buffer
+	selected, err := RunPicker(PickerConfig{
+		In:         strings.NewReader("\x1b[A \r"),
+		Out:        &out,
+		Scope:      ScopeGlobal,
+		MaxVisible: 5,
+	}, items)
+	if err != nil {
+		t.Fatalf("RunPicker windowed failed: %v", err)
+	}
+	if !reflect.DeepEqual(selected, []string{"hermes"}) {
+		t.Fatalf("selected = %v, want [hermes]", selected)
 	}
 }

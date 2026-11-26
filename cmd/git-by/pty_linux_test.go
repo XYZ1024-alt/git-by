@@ -71,7 +71,18 @@ func TestSetupInteractiveRealPTY(t *testing.T) {
 
 		cmd := exec.Command(binPath, "setup", "--no-color")
 		cmd.Dir = env.repoDir
-		cmd.Env = append(os.Environ(), "HOME="+virtHome, "NO_COLOR=1", "DSH_HOME=")
+		cmd.Env = append(os.Environ(),
+			"HOME="+virtHome,
+			"NO_COLOR=1",
+			"DSH_HOME=",
+			"PI_CODING_AGENT_DIR=",
+			"OMP_CODING_AGENT_DIR=",
+			"CODEX_HOME=",
+			"COPILOT_HOME=",
+			"CLINE_DIR=",
+			"KIMI_CODE_HOME=",
+			"HERMES_HOME=",
+		)
 		cmd.Stdin = slave
 		cmd.Stdout = slave
 		cmd.Stderr = slave
@@ -90,7 +101,7 @@ func TestSetupInteractiveRealPTY(t *testing.T) {
 				n, err := master.Read(buf)
 				if n > 0 {
 					all.Write(buf[:n])
-					if !notified && bytes.Contains(all.Bytes(), []byte("1 of 8 selected")) {
+					if !notified && bytes.Contains(all.Bytes(), []byte("1 of 30 selected")) {
 						notified = true
 						readyCh <- struct{}{}
 					}
@@ -130,7 +141,10 @@ func TestSetupInteractiveRealPTY(t *testing.T) {
 		}
 		if !strings.Contains(fullOut, "[x] Antigravity (agy)") ||
 			!strings.Contains(fullOut, "[ ] Codex (codex)") ||
-			!strings.Contains(fullOut, "[ ] DeepSeek Harness (dsh)") {
+			!strings.Contains(fullOut, "[ ] DeepSeek Harness (dsh)") ||
+			!strings.Contains(fullOut, "[ ] Oh My Pi (omp)") ||
+			!strings.Contains(fullOut, "[ ] Gemini CLI (gemini)") ||
+			!strings.Contains(fullOut, "[ ] GitHub Copilot (copilot)") {
 			t.Fatalf("initial checklist missing expected pre-selections:\n%s", fullOut)
 		}
 		if !strings.Contains(fullOut, "Configured 2 agent(s).") {

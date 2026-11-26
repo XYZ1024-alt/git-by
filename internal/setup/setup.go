@@ -36,8 +36,15 @@ type Options struct {
 	Scope             Scope    // ScopeGlobal (default if empty) or ScopeProject
 	HomeDir           string   // required for ScopeGlobal
 	DSHHome           string   // optional $DSH_HOME override for DeepSeek Harness (defaults to ~/.dsh)
+	PiAgentDir        string   // optional $PI_CODING_AGENT_DIR override for Pi Agent (defaults to ~/.pi/agent)
+	OmpAgentDir       string   // optional $OMP_CODING_AGENT_DIR override for Oh My Pi (defaults to ~/.omp/agent)
+	CodexHome         string   // optional $CODEX_HOME override for OpenAI Codex (defaults to ~/.codex)
+	CopilotHome       string   // optional $COPILOT_HOME override for GitHub Copilot (defaults to ~/.copilot)
+	ClineDir          string   // optional $CLINE_DIR override for Cline (defaults to ~/.cline)
+	KimiHome          string   // optional $KIMI_CODE_HOME override for Kimi Code (defaults to ~/.kimi-code)
+	HermesHome        string   // optional $HERMES_HOME override for Hermes Agent (defaults to ~/.hermes)
 	ProjectRoot       string   // required for ScopeProject
-	Agents            []string // optional filter: agy, pi, claude, codex, opencode, dsh, cursor, windsurf
+	Agents            []string // optional filter across supported mainstream harnesses
 	SelectedTargets   []string // optional interactive picker target IDs
 	CreateMissingDirs bool     // create parent directories for explicitly selected global targets
 	Uninstall         bool
@@ -89,6 +96,59 @@ var defaultGlobalAgents = []string{
 	"dsh",
 	"cursor",
 	"windsurf",
+	"omp",
+	"gemini",
+	"copilot",
+	"cline",
+	"roo",
+	"kilo",
+	"droid",
+	"amp",
+	"goose",
+	"crush",
+	"kiro",
+	"continue",
+	"trae",
+	"augment",
+	"qwen",
+	"kimi",
+	"codebuddy",
+	"junie",
+	"zed",
+	"aider",
+	"openhands",
+	"hermes",
+}
+
+// SupportedAgentIDs returns a copy of all canonical agent harness IDs supported by setup.
+func SupportedAgentIDs() []string {
+	out := make([]string, len(defaultGlobalAgents))
+	copy(out, defaultGlobalAgents)
+	return out
+}
+
+type globalEnvDirs struct {
+	dshHome     string
+	piAgentDir  string
+	ompAgentDir string
+	codexHome   string
+	copilotHome string
+	clineDir    string
+	kimiHome    string
+	hermesHome  string
+}
+
+func globalEnvFromOptions(opts Options) globalEnvDirs {
+	return globalEnvDirs{
+		dshHome:     opts.DSHHome,
+		piAgentDir:  opts.PiAgentDir,
+		ompAgentDir: opts.OmpAgentDir,
+		codexHome:   opts.CodexHome,
+		copilotHome: opts.CopilotHome,
+		clineDir:    opts.ClineDir,
+		kimiHome:    opts.KimiHome,
+		hermesHome:  opts.HermesHome,
+	}
 }
 
 // RenderManagedBlock renders the unified git-by provenance instruction block for the given harness.
@@ -133,7 +193,7 @@ func ParseAgents(raw []string) ([]string, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
-	const supportedList = "agy, pi, claude, codex, opencode, dsh, cursor, windsurf"
+	supportedList := strings.Join(defaultGlobalAgents, ", ")
 
 	var out []string
 	seen := make(map[string]struct{}, len(raw))
@@ -165,20 +225,64 @@ func canonicalAgentID(name string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "agy", "antigravity":
 		return "agy", true
-	case "pi", "pi-agent":
+	case "pi", "pi-agent", "pi-coding-agent":
 		return "pi", true
 	case "claude", "claude-code":
 		return "claude", true
-	case "codex", "openai-codex":
+	case "codex", "openai-codex", "codex-cli":
 		return "codex", true
-	case "opencode":
+	case "opencode", "open-code":
 		return "opencode", true
 	case "dsh", "deepseek-harness":
 		return "dsh", true
 	case "cursor":
 		return "cursor", true
-	case "windsurf":
+	case "windsurf", "codeium-windsurf":
 		return "windsurf", true
+	case "omp", "oh-my-pi":
+		return "omp", true
+	case "gemini", "gemini-cli":
+		return "gemini", true
+	case "copilot", "github-copilot", "gh-copilot", "copilot-cli":
+		return "copilot", true
+	case "cline":
+		return "cline", true
+	case "roo", "roo-code", "roocode", "roo-cline":
+		return "roo", true
+	case "kilo", "kilocode", "kilo-code":
+		return "kilo", true
+	case "droid", "factory", "factory-droid":
+		return "droid", true
+	case "amp", "ampcode", "amp-code":
+		return "amp", true
+	case "goose", "block-goose":
+		return "goose", true
+	case "crush", "charm-crush":
+		return "crush", true
+	case "kiro", "kiro-cli", "aws-kiro":
+		return "kiro", true
+	case "continue", "continue-dev", "cn":
+		return "continue", true
+	case "trae", "trae-ide":
+		return "trae", true
+	case "augment", "auggie", "augment-code":
+		return "augment", true
+	case "qwen", "qwen-code":
+		return "qwen", true
+	case "kimi", "kimi-code", "kimi-cli":
+		return "kimi", true
+	case "codebuddy", "codebuddy-code", "tencent-codebuddy":
+		return "codebuddy", true
+	case "junie", "jetbrains-junie":
+		return "junie", true
+	case "zed", "zed-editor":
+		return "zed", true
+	case "aider":
+		return "aider", true
+	case "openhands", "open-hands":
+		return "openhands", true
+	case "hermes", "hermes-agent":
+		return "hermes", true
 	default:
 		return "", false
 	}
@@ -202,6 +306,50 @@ func agentDisplayName(agentID string) string {
 		return "Cursor"
 	case "windsurf":
 		return "Windsurf"
+	case "omp":
+		return "Oh My Pi"
+	case "gemini":
+		return "Gemini CLI"
+	case "copilot":
+		return "GitHub Copilot"
+	case "cline":
+		return "Cline"
+	case "roo":
+		return "Roo Code"
+	case "kilo":
+		return "Kilo Code"
+	case "droid":
+		return "Factory Droid"
+	case "amp":
+		return "Amp"
+	case "goose":
+		return "Goose"
+	case "crush":
+		return "Crush"
+	case "kiro":
+		return "Kiro"
+	case "continue":
+		return "Continue"
+	case "trae":
+		return "Trae"
+	case "augment":
+		return "Augment"
+	case "qwen":
+		return "Qwen Code"
+	case "kimi":
+		return "Kimi Code"
+	case "codebuddy":
+		return "CodeBuddy"
+	case "junie":
+		return "Junie"
+	case "zed":
+		return "Zed"
+	case "aider":
+		return "Aider"
+	case "openhands":
+		return "OpenHands"
+	case "hermes":
+		return "Hermes Agent"
 	default:
 		return agentID
 	}
@@ -225,6 +373,50 @@ func agentHarness(agentID string) string {
 		return "cursor"
 	case "windsurf":
 		return "windsurf"
+	case "omp":
+		return "omp"
+	case "gemini":
+		return "gemini-cli"
+	case "copilot":
+		return "copilot"
+	case "cline":
+		return "cline"
+	case "roo":
+		return "roo-code"
+	case "kilo":
+		return "kilocode"
+	case "droid":
+		return "droid"
+	case "amp":
+		return "amp"
+	case "goose":
+		return "goose"
+	case "crush":
+		return "crush"
+	case "kiro":
+		return "kiro"
+	case "continue":
+		return "continue"
+	case "trae":
+		return "trae"
+	case "augment":
+		return "augment"
+	case "qwen":
+		return "qwen-code"
+	case "kimi":
+		return "kimi-code"
+	case "codebuddy":
+		return "codebuddy"
+	case "junie":
+		return "junie"
+	case "zed":
+		return "zed"
+	case "aider":
+		return "aider"
+	case "openhands":
+		return "openhands"
+	case "hermes":
+		return "hermes"
 	default:
 		return ""
 	}
@@ -257,14 +449,15 @@ func Run(opts Options) (*Summary, error) {
 		if !dirExists(homeDir) {
 			return nil, fmt.Errorf("home directory %q does not exist", homeDir)
 		}
+		env := globalEnvFromOptions(opts)
 		if len(opts.SelectedTargets) > 0 {
 			selectedAgents, err := ParseAgents(opts.SelectedTargets)
 			if err != nil {
 				return nil, err
 			}
-			specs = resolveGlobalTargetsWithMode(homeDir, opts.DSHHome, selectedAgents, createMissing)
+			specs = resolveGlobalTargetsWithEnv(homeDir, env, selectedAgents, createMissing)
 		} else {
-			specs = resolveGlobalTargetsWithMode(homeDir, opts.DSHHome, agents, createMissing)
+			specs = resolveGlobalTargetsWithEnv(homeDir, env, agents, createMissing)
 		}
 
 	case ScopeProject:
@@ -309,10 +502,14 @@ func Run(opts Options) (*Summary, error) {
 }
 
 func resolveGlobalTargets(homeDir string, agents []string) []targetSpec {
-	return resolveGlobalTargetsWithMode(homeDir, "", agents, false)
+	return resolveGlobalTargetsWithEnv(homeDir, globalEnvDirs{}, agents, false)
 }
 
 func resolveGlobalTargetsWithMode(homeDir string, dshHome string, agents []string, createMissing bool) []targetSpec {
+	return resolveGlobalTargetsWithEnv(homeDir, globalEnvDirs{dshHome: dshHome}, agents, createMissing)
+}
+
+func resolveGlobalTargetsWithEnv(homeDir string, env globalEnvDirs, agents []string, createMissing bool) []targetSpec {
 	explicit := len(agents) > 0
 	order := agents
 	if !explicit {
@@ -321,7 +518,7 @@ func resolveGlobalTargetsWithMode(homeDir string, dshHome string, agents []strin
 
 	specs := make([]targetSpec, 0, len(order))
 	for _, id := range order {
-		spec, include := resolveOneGlobalTargetWithDSH(homeDir, dshHome, id, explicit)
+		spec, include := resolveOneGlobalTargetWithEnv(homeDir, env, id, explicit)
 		if include {
 			if createMissing && explicit {
 				spec.skipReason = ""
@@ -332,10 +529,10 @@ func resolveGlobalTargetsWithMode(homeDir string, dshHome string, agents []strin
 	return specs
 }
 
-func resolveDshHomeDir(homeDir, dshHome string) (string, string) {
-	trimmed := strings.TrimSpace(dshHome)
+func resolveEnvHomeDir(homeDir, override, defaultRel string) (string, string) {
+	trimmed := strings.TrimSpace(override)
 	if trimmed == "" {
-		def := filepath.Join(homeDir, ".dsh")
+		def := filepath.Join(homeDir, defaultRel)
 		return def, formatHomeDisplayPath(homeDir, def)
 	}
 	expanded := trimmed
@@ -349,11 +546,35 @@ func resolveDshHomeDir(homeDir, dshHome string) (string, string) {
 	return cleaned, formatHomeDisplayPath(homeDir, cleaned)
 }
 
+func resolveDshHomeDir(homeDir, dshHome string) (string, string) {
+	return resolveEnvHomeDir(homeDir, dshHome, ".dsh")
+}
+
+func hasGeminiCLI(homeDir string) bool {
+	geminiDir := filepath.Join(homeDir, ".gemini")
+	for _, marker := range []string{
+		"GEMINI.md",
+		"settings.json",
+		"oauth_creds.json",
+		"google_accounts.json",
+		"installation_id",
+	} {
+		if fileExists(filepath.Join(geminiDir, marker)) {
+			return true
+		}
+	}
+	return false
+}
+
 func resolveOneGlobalTarget(homeDir string, agentID string, explicit bool) (targetSpec, bool) {
-	return resolveOneGlobalTargetWithDSH(homeDir, "", agentID, explicit)
+	return resolveOneGlobalTargetWithEnv(homeDir, globalEnvDirs{}, agentID, explicit)
 }
 
 func resolveOneGlobalTargetWithDSH(homeDir string, dshHome string, agentID string, explicit bool) (targetSpec, bool) {
+	return resolveOneGlobalTargetWithEnv(homeDir, globalEnvDirs{dshHome: dshHome}, agentID, explicit)
+}
+
+func resolveOneGlobalTargetWithEnv(homeDir string, env globalEnvDirs, agentID string, explicit bool) (targetSpec, bool) {
 	switch agentID {
 	case "agy":
 		target := filepath.Join(homeDir, ".gemini", "config", "rules", "git-by.md")
@@ -371,6 +592,22 @@ func resolveOneGlobalTargetWithDSH(homeDir string, dshHome string, agentID strin
 		return spec, true
 
 	case "pi":
+		if strings.TrimSpace(env.piAgentDir) != "" {
+			piDir, piDisplayDir := resolveEnvHomeDir(homeDir, env.piAgentDir, filepath.Join(".pi", "agent"))
+			target := filepath.Join(piDir, "APPEND_SYSTEM.md")
+			spec := targetSpec{
+				agentID:      "pi",
+				displayName:  "Pi Agent",
+				path:         target,
+				displayPath:  formatHomeDisplayPath(homeDir, target),
+				harness:      "pi",
+				isStandalone: false,
+			}
+			if !dirExists(piDir) {
+				spec.skipReason = fmt.Sprintf("(%s not found)", piDisplayDir)
+			}
+			return spec, true
+		}
 		target := filepath.Join(homeDir, ".pi", "agent", "APPEND_SYSTEM.md")
 		spec := targetSpec{
 			agentID:      "pi",
@@ -401,7 +638,8 @@ func resolveOneGlobalTargetWithDSH(homeDir string, dshHome string, agentID strin
 		return spec, true
 
 	case "codex":
-		target := filepath.Join(homeDir, ".codex", "AGENTS.md")
+		codexDir, codexDisplayDir := resolveEnvHomeDir(homeDir, env.codexHome, ".codex")
+		target := filepath.Join(codexDir, "AGENTS.md")
 		spec := targetSpec{
 			agentID:      "codex",
 			displayName:  "Codex",
@@ -410,8 +648,8 @@ func resolveOneGlobalTargetWithDSH(homeDir string, dshHome string, agentID strin
 			harness:      "codex",
 			isStandalone: false,
 		}
-		if !dirExists(filepath.Join(homeDir, ".codex")) {
-			spec.skipReason = "(~/.codex not found)"
+		if !dirExists(codexDir) {
+			spec.skipReason = fmt.Sprintf("(%s not found)", codexDisplayDir)
 		}
 		return spec, true
 
@@ -431,7 +669,7 @@ func resolveOneGlobalTargetWithDSH(homeDir string, dshHome string, agentID strin
 		return spec, true
 
 	case "dsh":
-		dshDir, dshDisplayDir := resolveDshHomeDir(homeDir, dshHome)
+		dshDir, dshDisplayDir := resolveDshHomeDir(homeDir, env.dshHome)
 		target := filepath.Join(dshDir, "AGENTS.md")
 		spec := targetSpec{
 			agentID:      "dsh",
@@ -557,8 +795,553 @@ func resolveOneGlobalTargetWithDSH(homeDir string, dshHome string, agentID strin
 			harness:      "windsurf",
 			isStandalone: false,
 		}, true
+
+	case "omp":
+		if strings.TrimSpace(env.ompAgentDir) != "" {
+			ompDir, ompDisplayDir := resolveEnvHomeDir(homeDir, env.ompAgentDir, filepath.Join(".omp", "agent"))
+			target := filepath.Join(ompDir, "APPEND_SYSTEM.md")
+			spec := targetSpec{
+				agentID:      "omp",
+				displayName:  "Oh My Pi",
+				path:         target,
+				displayPath:  formatHomeDisplayPath(homeDir, target),
+				harness:      "omp",
+				isStandalone: false,
+			}
+			if !dirExists(ompDir) {
+				spec.skipReason = fmt.Sprintf("(%s not found)", ompDisplayDir)
+			}
+			return spec, true
+		}
+		target := filepath.Join(homeDir, ".omp", "agent", "APPEND_SYSTEM.md")
+		spec := targetSpec{
+			agentID:      "omp",
+			displayName:  "Oh My Pi",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "omp",
+			isStandalone: false,
+		}
+		if !dirExists(filepath.Join(homeDir, ".omp")) {
+			spec.skipReason = "(~/.omp not found)"
+		}
+		return spec, true
+
+	case "gemini":
+		geminiDir := filepath.Join(homeDir, ".gemini")
+		target := filepath.Join(geminiDir, "GEMINI.md")
+		spec := targetSpec{
+			agentID:      "gemini",
+			displayName:  "Gemini CLI",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "gemini-cli",
+			isStandalone: false,
+		}
+		if !dirExists(geminiDir) {
+			spec.skipReason = "(~/.gemini not found)"
+		} else if !explicit && !hasGeminiCLI(homeDir) {
+			spec.skipReason = "(~/.gemini/settings.json not found)"
+		}
+		return spec, true
+
+	case "copilot":
+		copilotDir, copilotDisplayDir := resolveEnvHomeDir(homeDir, env.copilotHome, ".copilot")
+		target := filepath.Join(copilotDir, "copilot-instructions.md")
+		spec := targetSpec{
+			agentID:      "copilot",
+			displayName:  "GitHub Copilot",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "copilot",
+			isStandalone: false,
+		}
+		if !dirExists(copilotDir) {
+			spec.skipReason = fmt.Sprintf("(%s not found)", copilotDisplayDir)
+		}
+		return spec, true
+
+	case "cline":
+		if strings.TrimSpace(env.clineDir) != "" {
+			clineDir, clineDisplayDir := resolveEnvHomeDir(homeDir, env.clineDir, ".cline")
+			target := filepath.Join(clineDir, "rules", "git-by.md")
+			spec := targetSpec{
+				agentID:      "cline",
+				displayName:  "Cline",
+				path:         target,
+				displayPath:  formatHomeDisplayPath(homeDir, target),
+				harness:      "cline",
+				isStandalone: true,
+			}
+			if !dirExists(clineDir) {
+				spec.skipReason = fmt.Sprintf("(%s not found)", clineDisplayDir)
+			}
+			return spec, true
+		}
+		dotCline := filepath.Join(homeDir, ".cline")
+		docsCline := filepath.Join(homeDir, "Documents", "Cline")
+		target := filepath.Join(dotCline, "rules", "git-by.md")
+		skipReason := ""
+		if dirExists(dotCline) {
+			target = filepath.Join(dotCline, "rules", "git-by.md")
+		} else if dirExists(docsCline) {
+			target = filepath.Join(docsCline, "Rules", "git-by.md")
+		} else {
+			skipReason = "(~/.cline not found)"
+		}
+		return targetSpec{
+			agentID:      "cline",
+			displayName:  "Cline",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "cline",
+			isStandalone: true,
+			skipReason:   skipReason,
+		}, true
+
+	case "roo":
+		rooDir := filepath.Join(homeDir, ".roo")
+		target := filepath.Join(rooDir, "rules", "git-by.md")
+		spec := targetSpec{
+			agentID:      "roo",
+			displayName:  "Roo Code",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "roo-code",
+			isStandalone: true,
+		}
+		if !dirExists(rooDir) {
+			spec.skipReason = "(~/.roo not found)"
+		}
+		return spec, true
+
+	case "kilo":
+		kiloConfigDir := filepath.Join(homeDir, ".config", "kilo")
+		kiloDotDir := filepath.Join(homeDir, ".kilocode")
+		configAgents := filepath.Join(kiloConfigDir, "AGENTS.md")
+		standaloneRule := filepath.Join(kiloDotDir, "rules", "git-by.md")
+		if fileExists(configAgents) || (dirExists(kiloConfigDir) && !fileExists(standaloneRule)) {
+			return targetSpec{
+				agentID:      "kilo",
+				displayName:  "Kilo Code",
+				path:         configAgents,
+				displayPath:  formatHomeDisplayPath(homeDir, configAgents),
+				harness:      "kilocode",
+				isStandalone: false,
+			}, true
+		}
+		spec := targetSpec{
+			agentID:      "kilo",
+			displayName:  "Kilo Code",
+			path:         standaloneRule,
+			displayPath:  formatHomeDisplayPath(homeDir, standaloneRule),
+			harness:      "kilocode",
+			isStandalone: true,
+		}
+		if !dirExists(kiloDotDir) {
+			spec.skipReason = "(~/.kilocode not found)"
+		}
+		return spec, true
+
+	case "droid":
+		factoryDir := filepath.Join(homeDir, ".factory")
+		target := filepath.Join(factoryDir, "AGENTS.md")
+		spec := targetSpec{
+			agentID:      "droid",
+			displayName:  "Factory Droid",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "droid",
+			isStandalone: false,
+		}
+		if !dirExists(factoryDir) {
+			spec.skipReason = "(~/.factory not found)"
+		}
+		return spec, true
+
+	case "amp":
+		ampDir := filepath.Join(homeDir, ".config", "amp")
+		target := filepath.Join(ampDir, "AGENTS.md")
+		spec := targetSpec{
+			agentID:      "amp",
+			displayName:  "Amp",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "amp",
+			isStandalone: false,
+		}
+		if !dirExists(ampDir) {
+			spec.skipReason = "(~/.config/amp not found)"
+		}
+		return spec, true
+
+	case "goose":
+		gooseDir := filepath.Join(homeDir, ".config", "goose")
+		target := filepath.Join(gooseDir, ".goosehints")
+		spec := targetSpec{
+			agentID:      "goose",
+			displayName:  "Goose",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "goose",
+			isStandalone: false,
+		}
+		if !dirExists(gooseDir) {
+			spec.skipReason = "(~/.config/goose not found)"
+		}
+		return spec, true
+
+	case "crush":
+		crushDir := filepath.Join(homeDir, ".config", "crush")
+		target := filepath.Join(crushDir, "CRUSH.md")
+		spec := targetSpec{
+			agentID:      "crush",
+			displayName:  "Crush",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "crush",
+			isStandalone: false,
+		}
+		if !dirExists(crushDir) {
+			spec.skipReason = "(~/.config/crush not found)"
+		}
+		return spec, true
+
+	case "kiro":
+		kiroDir := filepath.Join(homeDir, ".kiro")
+		target := filepath.Join(kiroDir, "steering", "git-by.md")
+		spec := targetSpec{
+			agentID:      "kiro",
+			displayName:  "Kiro",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "kiro",
+			isStandalone: true,
+		}
+		if !dirExists(kiroDir) {
+			spec.skipReason = "(~/.kiro not found)"
+		}
+		return spec, true
+
+	case "continue":
+		continueDir := filepath.Join(homeDir, ".continue")
+		target := filepath.Join(continueDir, "rules", "git-by.md")
+		spec := targetSpec{
+			agentID:      "continue",
+			displayName:  "Continue",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "continue",
+			isStandalone: true,
+		}
+		if !dirExists(continueDir) {
+			spec.skipReason = "(~/.continue not found)"
+		}
+		return spec, true
+
+	case "trae":
+		traeDir := filepath.Join(homeDir, ".trae")
+		userRulesPlain := filepath.Join(traeDir, "user_rules")
+		target := filepath.Join(traeDir, "user_rules.md")
+		if fileExists(userRulesPlain) {
+			target = userRulesPlain
+		} else if dirExists(userRulesPlain) {
+			target = filepath.Join(userRulesPlain, "user_rules.md")
+		}
+		spec := targetSpec{
+			agentID:      "trae",
+			displayName:  "Trae",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "trae",
+			isStandalone: false,
+		}
+		if !dirExists(traeDir) {
+			spec.skipReason = "(~/.trae not found)"
+		}
+		return spec, true
+
+	case "augment":
+		augmentDir := filepath.Join(homeDir, ".augment")
+		target := filepath.Join(augmentDir, "rules", "git-by.md")
+		spec := targetSpec{
+			agentID:      "augment",
+			displayName:  "Augment",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "augment",
+			isStandalone: true,
+		}
+		if !dirExists(augmentDir) {
+			spec.skipReason = "(~/.augment not found)"
+		}
+		return spec, true
+
+	case "qwen":
+		qwenDir := filepath.Join(homeDir, ".qwen")
+		target := filepath.Join(qwenDir, "QWEN.md")
+		spec := targetSpec{
+			agentID:      "qwen",
+			displayName:  "Qwen Code",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "qwen-code",
+			isStandalone: false,
+		}
+		if !dirExists(qwenDir) {
+			spec.skipReason = "(~/.qwen not found)"
+		}
+		return spec, true
+
+	case "kimi":
+		if strings.TrimSpace(env.kimiHome) != "" {
+			kimiDir, kimiDisplayDir := resolveEnvHomeDir(homeDir, env.kimiHome, ".kimi-code")
+			target := filepath.Join(kimiDir, "AGENTS.md")
+			spec := targetSpec{
+				agentID:      "kimi",
+				displayName:  "Kimi Code",
+				path:         target,
+				displayPath:  formatHomeDisplayPath(homeDir, target),
+				harness:      "kimi-code",
+				isStandalone: false,
+			}
+			if !dirExists(kimiDir) {
+				spec.skipReason = fmt.Sprintf("(%s not found)", kimiDisplayDir)
+			}
+			return spec, true
+		}
+		kimiCodeDir := filepath.Join(homeDir, ".kimi-code")
+		legacyKimiDir := filepath.Join(homeDir, ".kimi")
+		target := filepath.Join(kimiCodeDir, "AGENTS.md")
+		skipReason := ""
+		if dirExists(kimiCodeDir) {
+			target = filepath.Join(kimiCodeDir, "AGENTS.md")
+		} else if dirExists(legacyKimiDir) {
+			target = filepath.Join(legacyKimiDir, "AGENTS.md")
+		} else {
+			skipReason = "(~/.kimi-code not found)"
+		}
+		return targetSpec{
+			agentID:      "kimi",
+			displayName:  "Kimi Code",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "kimi-code",
+			isStandalone: false,
+			skipReason:   skipReason,
+		}, true
+
+	case "codebuddy":
+		cbDir := filepath.Join(homeDir, ".codebuddy")
+		target := filepath.Join(cbDir, "rules", "git-by.md")
+		spec := targetSpec{
+			agentID:      "codebuddy",
+			displayName:  "CodeBuddy",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "codebuddy",
+			isStandalone: true,
+		}
+		if !dirExists(cbDir) {
+			spec.skipReason = "(~/.codebuddy not found)"
+		}
+		return spec, true
+
+	case "junie":
+		junieDir := filepath.Join(homeDir, ".junie")
+		agentsFile := filepath.Join(junieDir, "AGENTS.md")
+		guidelinesFile := filepath.Join(junieDir, "guidelines.md")
+		target := agentsFile
+		if fileExists(guidelinesFile) && !fileExists(agentsFile) {
+			target = guidelinesFile
+		}
+		spec := targetSpec{
+			agentID:      "junie",
+			displayName:  "Junie",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "junie",
+			isStandalone: false,
+		}
+		if !dirExists(junieDir) {
+			spec.skipReason = "(~/.junie not found)"
+		}
+		return spec, true
+
+	case "zed":
+		zedDir := filepath.Join(homeDir, ".config", "zed")
+		target := filepath.Join(zedDir, "AGENTS.md")
+		spec := targetSpec{
+			agentID:      "zed",
+			displayName:  "Zed",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "zed",
+			isStandalone: false,
+		}
+		if !dirExists(zedDir) {
+			spec.skipReason = "(~/.config/zed not found)"
+		}
+		return spec, true
+
+	case "aider":
+		aiderDir := filepath.Join(homeDir, ".aider")
+		target := filepath.Join(aiderDir, "CONVENTIONS.md")
+		spec := targetSpec{
+			agentID:      "aider",
+			displayName:  "Aider",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "aider",
+			isStandalone: false,
+		}
+		if !dirExists(aiderDir) {
+			spec.skipReason = "(~/.aider not found)"
+		}
+		return spec, true
+
+	case "openhands":
+		ohDir := filepath.Join(homeDir, ".openhands")
+		target := filepath.Join(ohDir, "microagents", "git-by.md")
+		spec := targetSpec{
+			agentID:      "openhands",
+			displayName:  "OpenHands",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "openhands",
+			isStandalone: true,
+		}
+		if !dirExists(ohDir) {
+			spec.skipReason = "(~/.openhands not found)"
+		}
+		return spec, true
+
+	case "hermes":
+		hermesDir, hermesDisplayDir := resolveEnvHomeDir(homeDir, env.hermesHome, ".hermes")
+		target := filepath.Join(hermesDir, "SOUL.md")
+		spec := targetSpec{
+			agentID:      "hermes",
+			displayName:  "Hermes Agent",
+			path:         target,
+			displayPath:  formatHomeDisplayPath(homeDir, target),
+			harness:      "hermes",
+			isStandalone: false,
+		}
+		if !dirExists(hermesDir) {
+			spec.skipReason = fmt.Sprintf("(%s not found)", hermesDisplayDir)
+		}
+		return spec, true
 	}
 	return targetSpec{}, false
+}
+
+var projectDedicatedOrder = []string{
+	"claude",
+	"cursor",
+	"windsurf",
+	"gemini",
+	"copilot",
+	"cline",
+	"roo",
+	"kilo",
+	"goose",
+	"crush",
+	"kiro",
+	"continue",
+	"trae",
+	"augment",
+	"qwen",
+	"codebuddy",
+	"junie",
+	"zed",
+	"aider",
+}
+
+func isAgentsMDHarness(agentID string) bool {
+	switch agentID {
+	case "agy", "pi", "omp", "codex", "opencode", "dsh", "droid", "amp", "kimi", "openhands", "hermes":
+		return true
+	default:
+		return false
+	}
+}
+
+func resolveProjectDedicatedTarget(projectRoot, agentID string) (spec targetSpec, pickerLabel string, detected bool) {
+	mk := func(id, rel string, standalone bool, detectDirRel string) (targetSpec, string, bool) {
+		relSlash := filepath.ToSlash(rel)
+		full := filepath.Join(projectRoot, filepath.FromSlash(relSlash))
+		det := fileExists(full)
+		if !det && detectDirRel != "" {
+			det = dirHasEntries(filepath.Join(projectRoot, filepath.FromSlash(detectDirRel)))
+		}
+		s := targetSpec{
+			agentID:      id,
+			displayName:  agentDisplayName(id),
+			path:         full,
+			displayPath:  relSlash,
+			harness:      agentHarness(id),
+			isStandalone: standalone,
+		}
+		return s, fmt.Sprintf("%s (%s)", agentDisplayName(id), relSlash), det
+	}
+
+	switch agentID {
+	case "claude":
+		return mk("claude", "CLAUDE.md", false, "")
+	case "cursor":
+		return mk("cursor", ".cursorrules", false, "")
+	case "windsurf":
+		return mk("windsurf", ".windsurfrules", false, "")
+	case "gemini":
+		return mk("gemini", "GEMINI.md", false, "")
+	case "copilot":
+		return mk("copilot", ".github/copilot-instructions.md", false, "")
+	case "cline":
+		if fileExists(filepath.Join(projectRoot, ".clinerules")) {
+			return mk("cline", ".clinerules", false, "")
+		}
+		return mk("cline", ".clinerules/git-by.md", true, ".clinerules")
+	case "roo":
+		if fileExists(filepath.Join(projectRoot, ".roorules")) {
+			return mk("roo", ".roorules", false, "")
+		}
+		return mk("roo", ".roo/rules/git-by.md", true, ".roo/rules")
+	case "kilo":
+		if fileExists(filepath.Join(projectRoot, ".kilorules")) {
+			return mk("kilo", ".kilorules", false, "")
+		}
+		return mk("kilo", ".kilocode/rules/git-by.md", true, ".kilocode/rules")
+	case "goose":
+		return mk("goose", ".goosehints", false, "")
+	case "crush":
+		return mk("crush", "CRUSH.md", false, "")
+	case "kiro":
+		return mk("kiro", ".kiro/steering/git-by.md", true, ".kiro/steering")
+	case "continue":
+		if fileExists(filepath.Join(projectRoot, ".continuerules")) {
+			return mk("continue", ".continuerules", false, "")
+		}
+		return mk("continue", ".continue/rules/git-by.md", true, ".continue/rules")
+	case "trae":
+		if fileExists(filepath.Join(projectRoot, ".trae", "rules", "project_rules.md")) {
+			return mk("trae", ".trae/rules/project_rules.md", false, ".trae/rules")
+		}
+		return mk("trae", ".trae/rules/git-by.md", true, ".trae/rules")
+	case "augment":
+		return mk("augment", ".augment/rules/git-by.md", true, ".augment/rules")
+	case "qwen":
+		return mk("qwen", "QWEN.md", false, "")
+	case "codebuddy":
+		return mk("codebuddy", "CODEBUDDY.md", false, "")
+	case "junie":
+		return mk("junie", ".junie/guidelines.md", false, ".junie")
+	case "zed":
+		return mk("zed", ".rules", false, "")
+	case "aider":
+		return mk("aider", "CONVENTIONS.md", false, "")
+	default:
+		return targetSpec{}, "", false
+	}
 }
 
 func resolveProjectTargets(projectRoot string, agents []string, uninstall bool) []targetSpec {
@@ -576,27 +1359,14 @@ func resolveProjectTargets(projectRoot string, agents []string, uninstall bool) 
 			})
 		}
 
-		optionalFiles := []struct {
-			agentID     string
-			displayName string
-			relPath     string
-			harness     string
-		}{
-			{agentID: "claude", displayName: "Claude Code", relPath: "CLAUDE.md", harness: "claude-code"},
-			{agentID: "cursor", displayName: "Cursor", relPath: ".cursorrules", harness: "cursor"},
-			{agentID: "windsurf", displayName: "Windsurf", relPath: ".windsurfrules", harness: "windsurf"},
-		}
-		for _, opt := range optionalFiles {
-			full := filepath.Join(projectRoot, opt.relPath)
-			if fileExists(full) {
-				specs = append(specs, targetSpec{
-					agentID:      opt.agentID,
-					displayName:  opt.displayName,
-					path:         full,
-					displayPath:  opt.relPath,
-					harness:      opt.harness,
-					isStandalone: false,
-				})
+		for _, id := range projectDedicatedOrder {
+			spec, _, detected := resolveProjectDedicatedTarget(projectRoot, id)
+			if uninstall {
+				if fileExists(spec.path) {
+					specs = append(specs, spec)
+				}
+			} else if detected {
+				specs = append(specs, spec)
 			}
 		}
 		return specs
@@ -605,8 +1375,7 @@ func resolveProjectTargets(projectRoot string, agents []string, uninstall bool) 
 	// Count how many requested agents map to AGENTS.md so we know whether to use a specific harness or generic placeholder.
 	var agentsMDMapped []string
 	for _, id := range agents {
-		switch id {
-		case "agy", "pi", "codex", "opencode", "dsh":
+		if isAgentsMDHarness(id) {
 			agentsMDMapped = append(agentsMDMapped, id)
 		}
 	}
@@ -614,35 +1383,7 @@ func resolveProjectTargets(projectRoot string, agents []string, uninstall bool) 
 	var specs []targetSpec
 	addedAgentsMD := false
 	for _, id := range agents {
-		switch id {
-		case "claude":
-			specs = append(specs, targetSpec{
-				agentID:      "claude",
-				displayName:  "Claude Code",
-				path:         filepath.Join(projectRoot, "CLAUDE.md"),
-				displayPath:  "CLAUDE.md",
-				harness:      "claude-code",
-				isStandalone: false,
-			})
-		case "cursor":
-			specs = append(specs, targetSpec{
-				agentID:      "cursor",
-				displayName:  "Cursor",
-				path:         filepath.Join(projectRoot, ".cursorrules"),
-				displayPath:  ".cursorrules",
-				harness:      "cursor",
-				isStandalone: false,
-			})
-		case "windsurf":
-			specs = append(specs, targetSpec{
-				agentID:      "windsurf",
-				displayName:  "Windsurf",
-				path:         filepath.Join(projectRoot, ".windsurfrules"),
-				displayPath:  ".windsurfrules",
-				harness:      "windsurf",
-				isStandalone: false,
-			})
-		case "agy", "pi", "codex", "opencode", "dsh":
+		if isAgentsMDHarness(id) {
 			if addedAgentsMD {
 				continue
 			}
@@ -661,6 +1402,11 @@ func resolveProjectTargets(projectRoot string, agents []string, uninstall bool) 
 				spec.displayName = agentDisplayName(only)
 				spec.harness = agentHarness(only)
 			}
+			specs = append(specs, spec)
+			continue
+		}
+
+		if spec, _, _ := resolveProjectDedicatedTarget(projectRoot, id); spec.path != "" {
 			specs = append(specs, spec)
 		}
 	}
@@ -1081,8 +1827,7 @@ func resolveSelectedProjectTargets(projectRoot string, selected []string) ([]tar
 			id = canonical
 		}
 
-		switch id {
-		case "agents":
+		if id == "agents" || isAgentsMDHarness(id) {
 			if _, dup := seen["agents"]; dup {
 				continue
 			}
@@ -1095,58 +1840,15 @@ func resolveSelectedProjectTargets(projectRoot string, selected []string) ([]tar
 				harness:      "",
 				isStandalone: false,
 			})
-		case "claude":
-			if _, dup := seen["claude"]; dup {
-				continue
-			}
-			seen["claude"] = struct{}{}
-			specs = append(specs, targetSpec{
-				agentID:      "claude",
-				displayName:  "Claude Code",
-				path:         filepath.Join(projectRoot, "CLAUDE.md"),
-				displayPath:  "CLAUDE.md",
-				harness:      "claude-code",
-				isStandalone: false,
-			})
-		case "cursor":
-			if _, dup := seen["cursor"]; dup {
-				continue
-			}
-			seen["cursor"] = struct{}{}
-			specs = append(specs, targetSpec{
-				agentID:      "cursor",
-				displayName:  "Cursor",
-				path:         filepath.Join(projectRoot, ".cursorrules"),
-				displayPath:  ".cursorrules",
-				harness:      "cursor",
-				isStandalone: false,
-			})
-		case "windsurf":
-			if _, dup := seen["windsurf"]; dup {
-				continue
-			}
-			seen["windsurf"] = struct{}{}
-			specs = append(specs, targetSpec{
-				agentID:      "windsurf",
-				displayName:  "Windsurf",
-				path:         filepath.Join(projectRoot, ".windsurfrules"),
-				displayPath:  ".windsurfrules",
-				harness:      "windsurf",
-				isStandalone: false,
-			})
-		case "agy", "pi", "codex", "opencode", "dsh":
-			if _, dup := seen["agents"]; dup {
-				continue
-			}
-			seen["agents"] = struct{}{}
-			specs = append(specs, targetSpec{
-				agentID:      "agents",
-				displayName:  "AGENTS.md",
-				path:         filepath.Join(projectRoot, "AGENTS.md"),
-				displayPath:  "AGENTS.md",
-				harness:      "",
-				isStandalone: false,
-			})
+			continue
+		}
+
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		if spec, _, _ := resolveProjectDedicatedTarget(projectRoot, id); spec.path != "" {
+			specs = append(specs, spec)
 		}
 	}
 	return specs, nil
@@ -1164,6 +1866,11 @@ func fileHasMarkers(path string) bool {
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+func dirHasEntries(path string) bool {
+	entries, err := os.ReadDir(path)
+	return err == nil && len(entries) > 0
 }
 
 func fileExists(path string) bool {

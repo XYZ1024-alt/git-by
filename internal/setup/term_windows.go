@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"syscall"
+	"unsafe"
 )
 
 const (
@@ -18,8 +19,9 @@ const (
 )
 
 var (
-	kernel32DLL        = syscall.NewLazyDLL("kernel32.dll")
-	procSetConsoleMode = kernel32DLL.NewProc("SetConsoleMode")
+	kernel32DLL                    = syscall.NewLazyDLL("kernel32.dll")
+	procSetConsoleMode             = kernel32DLL.NewProc("SetConsoleMode")
+	procGetConsoleScreenBufferInfo = kernel32DLL.NewProc("GetConsoleScreenBufferInfo")
 )
 
 func isFileTerminal(f *os.File) bool {
@@ -94,4 +96,41 @@ func readEscapeTail(in io.Reader, _ []byte) (int, bool) {
 		return 0, true
 	}
 	return 0, false
+}
+
+type consoleCoord struct {
+	X int16
+	Y int16
+}
+
+type consoleSmallRect struct {
+	Left   int16
+	Top    int16
+	Right  int16
+	Bottom int16
+}
+
+type consoleScreenBufferInfo struct {
+	Size              consoleCoord
+	CursorPosition    consoleCoord
+	Attributes        uint16
+	Window            consoleSmallRect
+	MaximumWindowSize consoleCoord
+}
+
+func termHeight(out io.Writer) int {
+	f, ok := out.(*os.File)
+	if !ok || f == nil {
+		return 0
+	}
+	var info consoleScreenBufferInfo
+	r1, _, _ := procGetConsoleScreenBufferInfo.Call(f.Fd(), uintptr(unsafe.Pointer(&info)))
+	if r1 == 0 {
+		return 0
+	}
+	rows := int(info.Window.Bottom-info.Window.Top) + 1
+	if rows <= 0 {
+		return 0
+	}
+	return rows
 }
