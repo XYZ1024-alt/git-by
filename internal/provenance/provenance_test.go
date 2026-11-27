@@ -383,6 +383,101 @@ func TestJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStripAuthorAttribution(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		// Ordinary human names remain untouched.
+		{"plain full name", "Ada Lovelace", "Ada Lovelace"},
+		{"name containing by substring", "Shelby Miller", "Shelby Miller"},
+		{"short name ending in by", "Bobby", "Bobby"},
+		{"ampersand human name", "Alice & Bob", "Alice & Bob"},
+		{"empty string", "", ""},
+		{"whitespace only", "   ", ""},
+
+		// Valid single, multi-model, nested, and no-base suffixes.
+		{"single model", "Ada by claude-sonnet-4", "Ada"},
+		{"multi-model suffix", "Ada by gpt-6-astra & 2 more", "Ada"},
+		{"nested repeated single models", "Ada by old-model by new-model", "Ada"},
+		{"nested repeated multi-models", "Ada by m1 & 1 more by m2 & 2 more", "Ada"},
+		{"no base single model", "by old-model", ""},
+		{"no base multi-model", "by old-model & 1 more", ""},
+		{"no base nested models", "by m1 by m2", ""},
+		{"legacy +N suffix", "Ada by gpt-6+1", "Ada"},
+		{"model with punctuation", "Ada Lovelace by openai/gpt-5.2:beta@1", "Ada Lovelace"},
+
+		// Malformed suffixes must not be erroneously stripped.
+		{"invalid space in model", "Alice by bad model", "Alice by bad model"},
+		{"zero more rejected", "Alice by gpt-6 & 0 more", "Alice by gpt-6 & 0 more"},
+		{"leading zero more rejected", "Alice by gpt-6 & 01 more", "Alice by gpt-6 & 01 more"},
+		{"double space before ampersand rejected", "Alice by gpt-6  & 1 more", "Alice by gpt-6  & 1 more"},
+		{"trailing by without model", "Alice by ", "Alice by"},
+		{"missing model before ampersand", "Alice by & 1 more", "Alice by & 1 more"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := provenance.StripAuthorAttribution(tc.input); got != tc.want {
+				t.Errorf("StripAuthorAttribution(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFormatAuthorName_DeduplicatesExistingSuffix(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		meta       provenance.Metadata
+		baseAuthor string
+		want       string
+	}{
+		{
+			name:       "replaces single existing suffix",
+			meta:       provenance.Metadata{Implementers: []string{"anthropic/claude-sonnet-4"}},
+			baseAuthor: "Ada Lovelace by old-model",
+			want:       "Ada Lovelace by claude-sonnet-4",
+		},
+		{
+			name:       "replaces multi-model existing suffix",
+			meta:       provenance.Metadata{Implementers: []string{"openai/m1", "anthropic/m2"}},
+			baseAuthor: "Ada Lovelace by old-model & 2 more",
+			want:       "Ada Lovelace by m1 & 1 more",
+		},
+		{
+			name:       "replaces bare by-model author without duplicating by",
+			meta:       provenance.Metadata{Implementers: []string{"anthropic/claude-sonnet-4"}},
+			baseAuthor: "by old-model",
+			want:       "by claude-sonnet-4",
+		},
+		{
+			name:       "preserves ordinary human name containing by",
+			meta:       provenance.Metadata{Implementers: []string{"anthropic/claude-sonnet-4"}},
+			baseAuthor: "Shelby Miller",
+			want:       "Shelby Miller by claude-sonnet-4",
+		},
+		{
+			name:       "empty metadata leaves base author unchanged",
+			meta:       provenance.Metadata{},
+			baseAuthor: "Ada Lovelace",
+			want:       "Ada Lovelace",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.meta.FormatAuthorName(tc.baseAuthor); got != tc.want {
+				t.Errorf("FormatAuthorName(%q) = %q, want %q", tc.baseAuthor, got, tc.want)
+			}
+		})
+	}
+}
+
 func assertTrailerLines(t *testing.T, got []provenance.Trailer, want []string) {
 	t.Helper()
 	lines := make([]string, len(got))

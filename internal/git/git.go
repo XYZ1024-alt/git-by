@@ -8,17 +8,45 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 const (
 	managedHookMarker = "# git-by-managed-hook"
 	sessionFileName   = "by-session.json"
+	maxHookCopyDepth  = 32
 )
 
 var managedHookNames = []string{
 	"prepare-commit-msg",
 	"post-commit",
+}
+
+var managedTrailerKeys = []string{
+	"Assisted-by",
+	"X-Agent-Orchestrator",
+	"X-Agent-Planner",
+	"X-Agent-Implementer",
+	"X-Agent-Reviewer",
+	"X-Agent-Committer",
+	"X-Agent-Harness",
+}
+
+// standardGitHookNames covers Git's standard hook filenames (per githooks(5))
+// so Windows NTFS extensionless hooks (including Husky v9 hooks without a #! shebang)
+// are recognized.
+var standardGitHookNames = map[string]struct{}{
+	"applypatch-msg": {}, "pre-applypatch": {}, "post-applypatch": {},
+	"pre-commit": {}, "pre-merge-commit": {}, "prepare-commit-msg": {},
+	"commit-msg": {}, "post-commit": {}, "pre-rebase": {},
+	"post-checkout": {}, "post-merge": {}, "pre-push": {},
+	"pre-receive": {}, "update": {}, "proc-receive": {},
+	"post-receive": {}, "post-update": {}, "reference-transaction": {},
+	"push-to-checkout": {}, "pre-auto-gc": {}, "post-rewrite": {},
+	"sendemail-validate": {}, "fsmonitor-watchman": {},
+	"p4-changelist": {}, "p4-prepare-changelist": {}, "p4-post-changelist": {},
+	"p4-pre-submit": {}, "post-index-change": {},
 }
 
 // Identity represents a Git user's name and email address.
@@ -33,17 +61,20 @@ type Repo struct {
 	TopLevel     string
 	GitDir       string
 	GitCommonDir string
+	LookupEnv    func(string) (string, bool)         // optional; nil falls back to os.LookupEnv
+	symlinkFn    func(oldname, newname string) error // unexported test seam; nil falls back to os.Symlink
 }
 
 // CommitRequest describes a `git commit` invocation managed by git-by.
 type CommitRequest struct {
-	AuthorName  string
-	AuthorEmail string
-	Trailers    []string // ordered "Key: Value" lines
-	Args        []string // raw passthrough args to `git commit`
-	Stdin       io.Reader
-	Stdout      io.Writer
-	Stderr      io.Writer
+	AuthorName           string
+	AuthorEmail          string
+	Trailers             []string // ordered "Key: Value" lines
+	ClearManagedTrailers bool     // strip managed AI trailers even when Trailers is empty
+	Args                 []string // raw passthrough args to `git commit`
+	Stdin                io.Reader
+	Stdout               io.Writer
+	Stderr               io.Writer
 }
 
 // HookScope configures where git-by hooks are installed or uninstalled.
@@ -111,6 +142,13 @@ func (r *Repo) SessionPath() (string, error) {
 	return r.GitPath(sessionFileName)
 }
 
+func (r *Repo) lookupEnv(key string) (string, bool) {
+	if r != nil && r.LookupEnv != nil {
+		return r.LookupEnv(key)
+	}
+	return os.LookupEnv(key)
+}
+
 // UserIdentity reads user.name and user.email from Git config, falling back to
 // GIT_AUTHOR_NAME and GIT_AUTHOR_EMAIL environment variables when unset.
 func (r *Repo) UserIdentity() (Identity, error) {
@@ -123,7 +161,9 @@ func (r *Repo) UserIdentity() (Identity, error) {
 		return Identity{}, err
 	}
 	if name == "" {
-		name = os.Getenv("GIT_AUTHOR_NAME")
+		if v, ok := r.lookupEnv("GIT_AUTHOR_NAME"); ok {
+			name = v
+		}
 	}
 
 	email, err := gitConfigGet(r.WorkDir, false, "user.email")
@@ -131,13 +171,39 @@ func (r *Repo) UserIdentity() (Identity, error) {
 		return Identity{}, err
 	}
 	if email == "" {
-		email = os.Getenv("GIT_AUTHOR_EMAIL")
+		if v, ok := r.lookupEnv("GIT_AUTHOR_EMAIL"); ok {
+			email = v
+		}
 	}
 
 	return Identity{
 		Name:  name,
 		Email: email,
 	}, nil
+}
+
+// HeadAuthorIdentity returns the author name and email recorded on HEAD, or
+// (Identity{}, false) on an unborn/empty repository or git log failure.
+func (r *Repo) HeadAuthorIdentity() (Identity, bool) {
+	if r == nil || r.WorkDir == "" {
+		return Identity{}, false
+	}
+	out, err := runGit(r.WorkDir, "log", "-1", "--format=%an%x00%ae", "HEAD")
+	if err != nil {
+		return Identity{}, false
+	}
+	sep := strings.IndexByte(out, '\x00')
+	if sep < 0 {
+		return Identity{}, false
+	}
+	ident := Identity{
+		Name:  out[:sep],
+		Email: out[sep+1:],
+	}
+	if ident.Name == "" && ident.Email == "" {
+		return Identity{}, false
+	}
+	return ident, true
 }
 
 // EffectiveHooksDir returns the active hooks directory for this repository/worktree,
@@ -155,7 +221,7 @@ func (r *Repo) EffectiveHooksDir() (string, error) {
 		return filepath.Join(r.GitCommonDir, "hooks"), nil
 	}
 
-	expanded, err := expandHome(hooksPath)
+	expanded, err := expandHomeWithLookup(hooksPath, r.LookupEnv)
 	if err != nil {
 		return "", err
 	}
@@ -170,48 +236,37 @@ func (r *Repo) EffectiveHooksDir() (string, error) {
 	return filepath.Clean(filepath.Join(baseDir, expanded)), nil
 }
 
-// ApplyTrailersToFile injects ordered trailers into msgFile in place using `git interpret-trailers`.
+// ApplyTrailersToFile strips stale managed AI trailers and injects ordered
+// trailers into msgFile in place using two-pass `git interpret-trailers`.
+// When trailers contains no non-empty entries, it is a no-op.
 func ApplyTrailersToFile(workDir string, msgFile string, trailers []string) error {
-	if len(trailers) == 0 {
+	cleanTrailers := cleanTrailerLines(trailers)
+	if len(cleanTrailers) == 0 {
 		return nil
 	}
 	if strings.TrimSpace(msgFile) == "" {
 		return errors.New("git: empty commit message file path")
 	}
 
-	args := make([]string, 0, 4+2*len(trailers)+1)
-	args = append(args, "interpret-trailers", "--in-place", "--if-exists", "replace")
-	added := 0
-	for _, t := range trailers {
-		t = strings.TrimRight(t, "\r\n")
-		if strings.TrimSpace(t) == "" {
-			continue
-		}
-		args = append(args, "--trailer", t)
-		added++
-	}
-	if added == 0 {
-		return nil
-	}
-
 	resolvedMsgFile, err := resolveMsgFilePath(workDir, msgFile)
 	if err != nil {
 		return err
 	}
-	args = append(args, resolvedMsgFile)
 
-	cmd := exec.Command("git", args...)
-	if workDir != "" {
-		cmd.Dir = workDir
+	// Pass 1: strip all stale managed AI trailer keys while preserving human trailers and comments.
+	stripArgs := append(stripManagedTrailerArgs(), resolvedMsgFile)
+	if err := runInterpretTrailers(workDir, stripArgs); err != nil {
+		return err
 	}
-	if out, err := cmd.CombinedOutput(); err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg != "" {
-			return fmt.Errorf("git interpret-trailers: %w: %s", err, msg)
-		}
-		return fmt.Errorf("git interpret-trailers: %w", err)
+
+	// Pass 2: inject the new trailers in canonical order.
+	applyArgs := make([]string, 0, 4+2*len(cleanTrailers)+1)
+	applyArgs = append(applyArgs, "interpret-trailers", "--in-place", "--if-exists", "replace")
+	for _, t := range cleanTrailers {
+		applyArgs = append(applyArgs, "--trailer", t)
 	}
-	return nil
+	applyArgs = append(applyArgs, resolvedMsgFile)
+	return runInterpretTrailers(workDir, applyArgs)
 }
 
 // Commit runs `git commit` with ephemeral hook mirroring, trailer injection via prepare-commit-msg,
@@ -247,7 +302,7 @@ func (r *Repo) Commit(req CommitRequest) (exitCode int, err error) {
 			}
 
 			if name == "prepare-commit-msg" {
-				if info, statErr := os.Stat(absSrcPath); statErr == nil && !info.IsDir() && isExecutable(info.Mode()) {
+				if info, statErr := os.Stat(absSrcPath); statErr == nil && isHookRunnable(runtime.GOOS, absSrcPath, info) {
 					origPrepareCommitMsg = absSrcPath
 				}
 				continue
@@ -255,14 +310,14 @@ func (r *Repo) Commit(req CommitRequest) (exitCode int, err error) {
 
 			dstPath := filepath.Join(tempHookDir, name)
 			info, statErr := os.Stat(absSrcPath)
-			if statErr != nil || info.IsDir() || !isExecutable(info.Mode()) {
-				if symErr := os.Symlink(absSrcPath, dstPath); symErr != nil {
-					return 0, fmt.Errorf("symlink hook helper %q: %w", absSrcPath, symErr)
+			if statErr != nil || !isHookRunnable(runtime.GOOS, absSrcPath, info) {
+				if mirrorErr := mirrorHookEntry(absSrcPath, dstPath, r.symlinkFn); mirrorErr != nil {
+					return 0, fmt.Errorf("mirror hook helper %q: %w", absSrcPath, mirrorErr)
 				}
 				continue
 			}
 
-			forwardScript := "#!/bin/sh\nexec " + shellQuote(absSrcPath) + " \"$@\"\n"
+			forwardScript := renderForwardHookScript(runtime.GOOS, absSrcPath)
 			if writeErr := writeExecutableScript(dstPath, forwardScript); writeErr != nil {
 				return 0, fmt.Errorf("write forwarding hook %q: %w", name, writeErr)
 			}
@@ -271,37 +326,25 @@ func (r *Repo) Commit(req CommitRequest) (exitCode int, err error) {
 		return 0, fmt.Errorf("read hooks dir %q: %w", origHooksDir, readErr)
 	}
 
-	cleanTrailers := make([]string, 0, len(req.Trailers))
-	for _, t := range req.Trailers {
-		t = strings.TrimRight(t, "\r\n")
-		if strings.TrimSpace(t) != "" {
-			cleanTrailers = append(cleanTrailers, t)
-		}
-	}
+	cleanTrailers := cleanTrailerLines(req.Trailers)
 
-	if len(cleanTrailers) > 0 || origPrepareCommitMsg != "" {
-		var sb strings.Builder
-		sb.WriteString("#!/bin/sh\n")
-		if origPrepareCommitMsg != "" {
-			sb.WriteString(shellQuote(origPrepareCommitMsg))
-			sb.WriteString(" \"$@\" || exit $?\n")
-		}
-		if len(cleanTrailers) > 0 {
-			sb.WriteString("exec git interpret-trailers --in-place --if-exists replace")
-			for _, t := range cleanTrailers {
-				sb.WriteString(" --trailer ")
-				sb.WriteString(shellQuote(t))
-			}
-			sb.WriteString(" \"$1\"\n")
-		}
+	if len(cleanTrailers) > 0 || req.ClearManagedTrailers || origPrepareCommitMsg != "" {
+		pcmScript := renderTempPrepareCommitMsg(runtime.GOOS, origPrepareCommitMsg, cleanTrailers, req.ClearManagedTrailers)
 		pcmPath := filepath.Join(tempHookDir, "prepare-commit-msg")
-		if writeErr := writeExecutableScript(pcmPath, sb.String()); writeErr != nil {
+		if writeErr := writeExecutableScript(pcmPath, pcmScript); writeErr != nil {
 			return 0, fmt.Errorf("write temp prepare-commit-msg hook: %w", writeErr)
 		}
 	}
 
-	gitArgs := make([]string, 0, 3+len(req.Args))
+	hasAmend, hasExplicitAuthor, hasResetAuthor := InspectCommitArgs(req.Args)
+
+	gitArgs := make([]string, 0, 4+len(req.Args))
 	gitArgs = append(gitArgs, "-c", "core.hooksPath="+tempHookDir, "commit")
+	if hasAmend && !hasExplicitAuthor && !hasResetAuthor &&
+		(len(cleanTrailers) > 0 || req.ClearManagedTrailers) &&
+		req.AuthorName != "" && req.AuthorEmail != "" {
+		gitArgs = append(gitArgs, "--author="+req.AuthorName+" <"+req.AuthorEmail+">")
+	}
 	gitArgs = append(gitArgs, req.Args...)
 
 	cmd := exec.Command("git", gitArgs...)
@@ -374,16 +417,8 @@ func InstallHooks(dir string, opts HookScope) (hooksDir string, err error) {
 			return "", fmt.Errorf("resolve orig hook path %q: %w", origPath, err)
 		}
 
-		var sb strings.Builder
-		sb.WriteString("#!/bin/sh\n")
-		sb.WriteString(managedHookMarker + "\n")
-		sb.WriteString("if [ -x " + shellQuote(absOrigPath) + " ]; then\n")
-		sb.WriteString("\t" + shellQuote(absOrigPath) + " \"$@\" || exit $?\n")
-		sb.WriteString("fi\n")
-		sb.WriteString("[ \"${GIT_BY_ACTIVE:-}\" = \"1\" ] && exit 0\n")
-		sb.WriteString("exec " + formattedBin + " hook run " + hookName + " \"$@\"\n")
-
-		if err := writeExecutableScript(hookPath, sb.String()); err != nil {
+		script := renderManagedHookScript(runtime.GOOS, absOrigPath, formattedBin, hookName)
+		if err := writeExecutableScript(hookPath, script); err != nil {
 			return "", fmt.Errorf("install hook %q: %w", hookPath, err)
 		}
 	}
@@ -556,9 +591,19 @@ func resolveMsgFilePath(workDir, msgFile string) (string, error) {
 	return filepath.Abs(msgFile)
 }
 
-func expandHome(p string) (string, error) {
+func expandHomeWithLookup(p string, lookup func(string) (string, bool)) (string, error) {
 	if p != "~" && !strings.HasPrefix(p, "~/") && !strings.HasPrefix(p, `~\`) {
 		return p, nil
+	}
+	if lookup != nil {
+		if runtime.GOOS == "windows" {
+			if home, ok := lookup("USERPROFILE"); ok && home != "" {
+				return expandHomeWithBase(p, home)
+			}
+		}
+		if home, ok := lookup("HOME"); ok && home != "" {
+			return expandHomeWithBase(p, home)
+		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -579,6 +624,326 @@ func expandHomeWithBase(p, home string) (string, error) {
 
 func isExecutable(mode os.FileMode) bool {
 	return mode.Perm()&0o111 != 0
+}
+
+func isStandardGitHookName(name string) bool {
+	_, ok := standardGitHookNames[name]
+	return ok
+}
+
+func isWindowsExecutableExt(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".exe", ".bat", ".cmd", ".com":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasShebang(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	var hdr [2]byte
+	n, err := io.ReadFull(f, hdr[:])
+	if err != nil || n < 2 {
+		return false
+	}
+	return hdr[0] == '#' && hdr[1] == '!'
+}
+
+func isHookRunnable(goos string, path string, info os.FileInfo) bool {
+	if info == nil || info.IsDir() {
+		return false
+	}
+	if goos != "windows" {
+		return isExecutable(info.Mode())
+	}
+	if !info.Mode().IsRegular() {
+		return false
+	}
+	base := filepath.Base(path)
+	if strings.HasSuffix(strings.ToLower(base), ".git-by-orig") {
+		return false
+	}
+	if isExecutable(info.Mode()) || isWindowsExecutableExt(base) {
+		return true
+	}
+	if isStandardGitHookName(base) && info.Size() > 0 {
+		return true
+	}
+	return hasShebang(path)
+}
+
+func hookExecPath(goos, absPath string) string {
+	if goos == "windows" {
+		return strings.ReplaceAll(filepath.ToSlash(absPath), `\`, "/")
+	}
+	return absPath
+}
+
+func renderForwardHookScript(goos, absSrcPath string) string {
+	execPath := shellQuote(hookExecPath(goos, absSrcPath))
+	if goos == "windows" {
+		return "#!/bin/sh\n" +
+			"if [ -x " + execPath + " ]; then\n" +
+			"\texec " + execPath + " \"$@\"\n" +
+			"fi\n" +
+			"exec sh " + execPath + " \"$@\"\n"
+	}
+	return "#!/bin/sh\nexec " + execPath + " \"$@\"\n"
+}
+
+func renderManagedHookScript(goos, absOrigPath, formattedBin, hookName string) string {
+	origPath := shellQuote(hookExecPath(goos, absOrigPath))
+	var sb strings.Builder
+	sb.WriteString("#!/bin/sh\n")
+	sb.WriteString(managedHookMarker + "\n")
+	if goos == "windows" {
+		sb.WriteString("if [ -x " + origPath + " ]; then\n")
+		sb.WriteString("\t" + origPath + " \"$@\" || exit $?\n")
+		sb.WriteString("elif [ -s " + origPath + " ]; then\n")
+		sb.WriteString("\tsh " + origPath + " \"$@\" || exit $?\n")
+		sb.WriteString("fi\n")
+	} else {
+		sb.WriteString("if [ -x " + origPath + " ]; then\n")
+		sb.WriteString("\t" + origPath + " \"$@\" || exit $?\n")
+		sb.WriteString("fi\n")
+	}
+	sb.WriteString("[ \"${GIT_BY_ACTIVE:-}\" = \"1\" ] && exit 0\n")
+	sb.WriteString("exec " + formattedBin + " hook run " + hookName + " \"$@\"\n")
+	return sb.String()
+}
+
+func cleanTrailerLines(trailers []string) []string {
+	if len(trailers) == 0 {
+		return nil
+	}
+	clean := make([]string, 0, len(trailers))
+	for _, t := range trailers {
+		t = strings.TrimRight(t, "\r\n")
+		if strings.TrimSpace(t) != "" {
+			clean = append(clean, t)
+		}
+	}
+	return clean
+}
+
+func stripManagedTrailerArgs() []string {
+	args := make([]string, 0, 5+2*len(managedTrailerKeys))
+	args = append(args, "interpret-trailers", "--in-place", "--trim-empty", "--if-exists", "replace")
+	for _, key := range managedTrailerKeys {
+		args = append(args, "--trailer", key+":")
+	}
+	return args
+}
+
+func runInterpretTrailers(workDir string, args []string) error {
+	cmd := exec.Command("git", args...)
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg != "" {
+			return fmt.Errorf("git interpret-trailers: %w: %s", err, msg)
+		}
+		return fmt.Errorf("git interpret-trailers: %w", err)
+	}
+	return nil
+}
+
+func renderTempPrepareCommitMsg(goos, origPrepareCommitMsg string, cleanTrailers []string, clearManaged bool) string {
+	var sb strings.Builder
+	sb.WriteString("#!/bin/sh\n")
+	if origPrepareCommitMsg != "" {
+		origExec := shellQuote(hookExecPath(goos, origPrepareCommitMsg))
+		if goos == "windows" {
+			sb.WriteString("if [ -x " + origExec + " ]; then\n")
+			sb.WriteString("\t" + origExec + " \"$@\" || exit $?\n")
+			sb.WriteString("else\n")
+			sb.WriteString("\tsh " + origExec + " \"$@\" || exit $?\n")
+			sb.WriteString("fi\n")
+		} else {
+			sb.WriteString(origExec + " \"$@\" || exit $?\n")
+		}
+	}
+	if len(cleanTrailers) > 0 || clearManaged {
+		var stripCmd strings.Builder
+		stripCmd.WriteString("git")
+		for _, arg := range stripManagedTrailerArgs() {
+			stripCmd.WriteByte(' ')
+			if strings.HasSuffix(arg, ":") {
+				stripCmd.WriteString(shellQuote(arg))
+			} else {
+				stripCmd.WriteString(arg)
+			}
+		}
+		if len(cleanTrailers) == 0 {
+			sb.WriteString("exec " + stripCmd.String() + " \"$1\"\n")
+		} else {
+			sb.WriteString(stripCmd.String() + " \"$1\" || exit $?\n")
+			sb.WriteString("exec git interpret-trailers --in-place --if-exists replace")
+			for _, t := range cleanTrailers {
+				sb.WriteString(" --trailer ")
+				sb.WriteString(shellQuote(t))
+			}
+			sb.WriteString(" \"$1\"\n")
+		}
+	}
+	return sb.String()
+}
+
+// InspectCommitArgs scans raw `git commit` arguments prior to "--" to detect
+// --amend, explicit --author, and --reset-author while ignoring option values
+// (such as `-m "--amend"`).
+func InspectCommitArgs(args []string) (hasAmend, hasExplicitAuthor, hasResetAuthor bool) {
+	for i := 0; i < len(args); i++ {
+		tok := args[i]
+		if tok == "--" {
+			break
+		}
+		switch {
+		case tok == "--amend":
+			hasAmend = true
+			continue
+		case tok == "--no-amend":
+			hasAmend = false
+			continue
+		case tok == "--reset-author":
+			hasResetAuthor = true
+			continue
+		case tok == "--no-reset-author":
+			hasResetAuthor = false
+			continue
+		case tok == "--author":
+			hasExplicitAuthor = true
+			if i+1 < len(args) {
+				i++
+			}
+			continue
+		case strings.HasPrefix(tok, "--author="):
+			hasExplicitAuthor = true
+			continue
+		}
+		if commitFlagConsumesNextArg(tok) && i+1 < len(args) {
+			i++
+		}
+	}
+	return hasAmend, hasExplicitAuthor, hasResetAuthor
+}
+
+func commitFlagConsumesNextArg(tok string) bool {
+	switch tok {
+	case "-m", "--message",
+		"-F", "--file",
+		"-c", "--reedit-message",
+		"-C", "--reuse-message",
+		"-t", "--template",
+		"--author",
+		"--date",
+		"--cleanup",
+		"--fixup",
+		"--squash",
+		"--trailer",
+		"--pathspec-from-file":
+		return true
+	}
+	if len(tok) >= 3 && tok[0] == '-' && tok[1] != '-' {
+		cluster := tok[1:]
+		last := cluster[len(cluster)-1]
+		if last == 'm' || last == 'F' || last == 'c' || last == 'C' || last == 't' {
+			for i := 0; i < len(cluster)-1; i++ {
+				switch cluster[i] {
+				case 'a', 'p', 'i', 'o', 'n', 'v', 'q', 's', 'e', 'z':
+				default:
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func mirrorHookEntry(srcPath, dstPath string, symlinkFn func(oldname, newname string) error) error {
+	if symlinkFn == nil {
+		symlinkFn = os.Symlink
+	}
+	if err := symlinkFn(srcPath, dstPath); err == nil {
+		return nil
+	}
+	if _, statErr := os.Stat(srcPath); errors.Is(statErr, os.ErrNotExist) {
+		if linfo, lstatErr := os.Lstat(srcPath); lstatErr == nil && linfo.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+	}
+	return copyFileOrDir(srcPath, dstPath)
+}
+
+func copyFileOrDir(srcPath, dstPath string) error {
+	return copyFileOrDirDepth(srcPath, dstPath, 0)
+}
+
+func copyFileOrDirDepth(srcPath, dstPath string, depth int) error {
+	if depth > maxHookCopyDepth {
+		return fmt.Errorf("copy hook entry %q: exceeded maximum directory depth %d", srcPath, maxHookCopyDepth)
+	}
+
+	info, err := os.Stat(srcPath)
+	if err != nil {
+		return fmt.Errorf("stat hook entry %q: %w", srcPath, err)
+	}
+
+	if info.IsDir() {
+		dirPerm := info.Mode().Perm() | 0o700
+		if err := os.MkdirAll(dstPath, dirPerm); err != nil {
+			return fmt.Errorf("create hook dir %q: %w", dstPath, err)
+		}
+		entries, err := os.ReadDir(srcPath)
+		if err != nil {
+			return fmt.Errorf("read hook dir %q: %w", srcPath, err)
+		}
+		for _, entry := range entries {
+			childSrc := filepath.Join(srcPath, entry.Name())
+			childDst := filepath.Join(dstPath, entry.Name())
+			if _, childStatErr := os.Stat(childSrc); errors.Is(childStatErr, os.ErrNotExist) {
+				if linfo, lstatErr := os.Lstat(childSrc); lstatErr == nil && linfo.Mode()&os.ModeSymlink != 0 {
+					continue
+				}
+			}
+			if err := copyFileOrDirDepth(childSrc, childDst, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+
+	in, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("open hook file %q: %w", srcPath, err)
+	}
+	defer in.Close()
+
+	filePerm := info.Mode().Perm() | 0o600
+	out, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, filePerm)
+	if err != nil {
+		return fmt.Errorf("create hook file %q: %w", dstPath, err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return fmt.Errorf("copy hook file %q to %q: %w", srcPath, dstPath, err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("close hook file %q: %w", dstPath, err)
+	}
+	return nil
 }
 
 func writeExecutableScript(path string, content string) error {

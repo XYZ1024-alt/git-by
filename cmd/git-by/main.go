@@ -222,6 +222,7 @@ git-by Flags (stripped before invoking git commit):
   --committer <model>              Override committer model
   --harness <name>                 Override harness (e.g. pi@1.0.0)
   --tool <tool>                    Append tool(s) used (repeatable)
+  --clear-trailers                 Strip managed AI trailers and author attribution (useful with --amend)
 
 All other flags (-m, -am, --amend, -S, --no-verify, --author, -- <paths>, etc.)
 are passed verbatim in order to 'git commit'. On success, clears by-session.json;
@@ -245,12 +246,13 @@ Flags:
 
 func (a *App) printStatsHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  git by stats [--since <date>] [--json] [--badge <output.svg>] [--top <n>]
+  git by stats [--since <date>] [--json] [--badge <output.svg>] [--theme <auto|dark|light>] [--top <n>]
 
 Flags:
   --since <date>         Analyze commits since date/ref (passed to git log --since)
   --json                 Output machine-readable JSON report
-  --badge <output.svg>   Write standalone GitHub-dark SVG provenance card
+  --badge <output.svg>   Write standalone adaptive SVG provenance card
+  --theme <mode>         SVG badge theme: auto (default), dark, or light
   --top <n>              Number of top models per role leaderboard (default: 5)
   --no-color             Disable ANSI colors in terminal dashboard
   -h, --help             Show this help

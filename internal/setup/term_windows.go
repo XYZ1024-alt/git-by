@@ -118,19 +118,33 @@ type consoleScreenBufferInfo struct {
 	MaximumWindowSize consoleCoord
 }
 
-func termHeight(out io.Writer) int {
+func termSize(out io.Writer) (rows, cols int) {
 	f, ok := out.(*os.File)
 	if !ok || f == nil {
-		return 0
+		return 0, 0
 	}
 	var info consoleScreenBufferInfo
 	r1, _, _ := procGetConsoleScreenBufferInfo.Call(f.Fd(), uintptr(unsafe.Pointer(&info)))
 	if r1 == 0 {
-		return 0
+		return 0, 0
 	}
-	rows := int(info.Window.Bottom-info.Window.Top) + 1
+	rows = int(info.Window.Bottom) - int(info.Window.Top) + 1
 	if rows <= 0 {
-		return 0
+		rows = 0
 	}
+	cols = int(info.Window.Right) - int(info.Window.Left) + 1
+	if cols <= 0 {
+		cols = 0
+	}
+	return rows, cols
+}
+
+func termHeight(out io.Writer) int {
+	rows, _ := termSize(out)
 	return rows
+}
+
+func termWidth(out io.Writer) int {
+	_, cols := termSize(out)
+	return cols
 }

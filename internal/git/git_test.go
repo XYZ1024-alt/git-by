@@ -720,3 +720,470 @@ func TestInstallAndUninstallHooks_Global(t *testing.T) {
 		t.Fatalf("UninstallHooks(Global ~/custom-hooks): %v", err)
 	}
 }
+
+func TestIsHookRunnable_CrossPlatform(t *testing.T) {
+	dir := t.TempDir()
+
+	pcmShebang := filepath.Join(dir, "prepare-commit-msg")
+	writeFile(t, pcmShebang, "#!/bin/sh\necho hi\n", 0o644)
+
+	huskyDir := filepath.Join(dir, "husky")
+	pcmHuskyV9 := filepath.Join(huskyDir, "prepare-commit-msg")
+	writeFile(t, pcmHuskyV9, "npm test\n", 0o644)
+
+	p4Hook := filepath.Join(dir, "p4-prepare-changelist")
+	writeFile(t, p4Hook, "echo p4\n", 0o644)
+
+	emptyPreCommit := filepath.Join(dir, "pre-commit")
+	writeFile(t, emptyPreCommit, "", 0o644)
+
+	helperNoShebang := filepath.Join(dir, "helper.sh")
+	writeFile(t, helperNoShebang, "HELPER=1\n", 0o644)
+
+	customShebang := filepath.Join(dir, "custom-hook")
+	writeFile(t, customShebang, "#!/bin/sh\nexit 0\n", 0o644)
+
+	origBackup := filepath.Join(dir, "prepare-commit-msg.git-by-orig")
+	writeFile(t, origBackup, "#!/bin/sh\nexit 0\n", 0o755)
+
+	subDir := filepath.Join(dir, "_")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatalf("mkdir _: %v", err)
+	}
+
+	batFile := filepath.Join(dir, "hook.bat")
+	writeFile(t, batFile, "@echo off\n", 0o644)
+	cmdFile := filepath.Join(dir, "hook.CMD")
+	writeFile(t, cmdFile, "@echo off\n", 0o644)
+	exeFile := filepath.Join(dir, "hook.exe")
+	writeFile(t, exeFile, "MZ", 0o644)
+
+	cases := []struct {
+		name        string
+		path        string
+		wantLinux   bool
+		wantWindows bool
+	}{
+		{"non-exec prepare-commit-msg with shebang", pcmShebang, false, true},
+		{"non-exec Husky v9 prepare-commit-msg without shebang", pcmHuskyV9, false, true},
+		{"non-exec p4-prepare-changelist without shebang", p4Hook, false, true},
+		{"empty pre-commit", emptyPreCommit, false, false},
+		{"non-standard helper without shebang", helperNoShebang, false, false},
+		{"non-standard custom file with shebang", customShebang, false, true},
+		{".git-by-orig backup ignored on windows", origBackup, true, false},
+		{"directory ignored on both", subDir, false, false},
+		{".bat executable on windows", batFile, false, true},
+		{".CMD executable on windows", cmdFile, false, true},
+		{".exe executable on windows", exeFile, false, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			info, err := os.Stat(tc.path)
+			if err != nil {
+				t.Fatalf("stat %s: %v", tc.path, err)
+			}
+			if got := isHookRunnable("linux", tc.path, info); got != tc.wantLinux {
+				t.Errorf("isHookRunnable(linux, %s) = %v, want %v", tc.path, got, tc.wantLinux)
+			}
+			if got := isHookRunnable("windows", tc.path, info); got != tc.wantWindows {
+				t.Errorf("isHookRunnable(windows, %s) = %v, want %v", tc.path, got, tc.wantWindows)
+			}
+		})
+	}
+}
+
+func TestRenderHookScripts_WindowsAndUnix(t *testing.T) {
+	winHook := `C:\Users\dev\repo\.husky\pre-commit`
+	if got := hookExecPath("windows", winHook); got != "C:/Users/dev/repo/.husky/pre-commit" {
+		t.Fatalf("hookExecPath(windows) = %q, want forward slashes", got)
+	}
+	if got := hookExecPath("linux", "/repo/.husky/pre-commit"); got != "/repo/.husky/pre-commit" {
+		t.Fatalf("hookExecPath(linux) = %q", got)
+	}
+
+	winForward := renderForwardHookScript("windows", winHook)
+	for _, want := range []string{
+		"#!/bin/sh\n",
+		"if [ -x 'C:/Users/dev/repo/.husky/pre-commit' ]; then\n",
+		"\texec 'C:/Users/dev/repo/.husky/pre-commit' \"$@\"\n",
+		"exec sh 'C:/Users/dev/repo/.husky/pre-commit' \"$@\"\n",
+	} {
+		if !strings.Contains(winForward, want) {
+			t.Errorf("windows forward script missing %q:\n%s", want, winForward)
+		}
+	}
+	if strings.Contains(winForward, `\`) {
+		t.Errorf("windows forward script still contains backslash:\n%s", winForward)
+	}
+
+	linuxForward := renderForwardHookScript("linux", "/repo/.husky/pre-commit")
+	wantLinuxForward := "#!/bin/sh\nexec '/repo/.husky/pre-commit' \"$@\"\n"
+	if linuxForward != wantLinuxForward {
+		t.Errorf("linux forward script =\n%q\nwant:\n%q", linuxForward, wantLinuxForward)
+	}
+
+	winOrig := `C:\Users\dev\repo\.git\hooks\prepare-commit-msg.git-by-orig`
+	winManaged := renderManagedHookScript("windows", winOrig, "'git-by'", "prepare-commit-msg")
+	for _, want := range []string{
+		managedHookMarker,
+		"if [ -x 'C:/Users/dev/repo/.git/hooks/prepare-commit-msg.git-by-orig' ]; then",
+		"elif [ -s 'C:/Users/dev/repo/.git/hooks/prepare-commit-msg.git-by-orig' ]; then",
+		"\tsh 'C:/Users/dev/repo/.git/hooks/prepare-commit-msg.git-by-orig' \"$@\" || exit $?",
+		"[ \"${GIT_BY_ACTIVE:-}\" = \"1\" ] && exit 0",
+		"exec 'git-by' hook run prepare-commit-msg \"$@\"",
+	} {
+		if !strings.Contains(winManaged, want) {
+			t.Errorf("windows managed script missing %q:\n%s", want, winManaged)
+		}
+	}
+
+	linuxManaged := renderManagedHookScript("linux", "/repo/.git/hooks/prepare-commit-msg.git-by-orig", "'git-by'", "prepare-commit-msg")
+	if strings.Contains(linuxManaged, "elif [ -s") {
+		t.Errorf("linux managed script should not contain windows elif fallback:\n%s", linuxManaged)
+	}
+	if !strings.Contains(linuxManaged, "if [ -x '/repo/.git/hooks/prepare-commit-msg.git-by-orig' ]; then") {
+		t.Errorf("linux managed script missing [ -x ... ] guard:\n%s", linuxManaged)
+	}
+
+	winPCM := renderTempPrepareCommitMsg("windows", `C:\repo\.husky\prepare-commit-msg`, nil, true)
+	if !strings.Contains(winPCM, "sh 'C:/repo/.husky/prepare-commit-msg' \"$@\" || exit $?") ||
+		!strings.Contains(winPCM, "exec git interpret-trailers --in-place --trim-empty --if-exists replace") {
+		t.Errorf("unexpected windows temp prepare-commit-msg:\n%s", winPCM)
+	}
+}
+
+func TestMirrorHookEntry_SymlinkFallbackToRecursiveCopy(t *testing.T) {
+	failSymlink := func(oldname, newname string) error {
+		return os.ErrPermission
+	}
+
+	srcRoot := t.TempDir()
+	dstRoot := t.TempDir()
+
+	// 1. Regular read-only file copied cleanly with owner write bit for later cleanup.
+	roFile := filepath.Join(srcRoot, "helper.txt")
+	writeFile(t, roFile, "helper content\n", 0o444)
+	dstFile := filepath.Join(dstRoot, "helper.txt")
+	if err := mirrorHookEntry(roFile, dstFile, failSymlink); err != nil {
+		t.Fatalf("mirrorHookEntry(file): %v", err)
+	}
+	gotFile, err := os.ReadFile(dstFile)
+	if err != nil || string(gotFile) != "helper content\n" {
+		t.Fatalf("copied file = %q (err=%v), want %q", string(gotFile), err, "helper content\n")
+	}
+
+	// 2. Nested directory structure (.husky/_/husky.sh + nested subdir) copied recursively.
+	nestedSrc := filepath.Join(srcRoot, "_")
+	writeFile(t, filepath.Join(nestedSrc, "husky.sh"), "HUSKY=1\n", 0o644)
+	writeFile(t, filepath.Join(nestedSrc, "sub", "nested.sh"), "NESTED=2\n", 0o644)
+	dstDir := filepath.Join(dstRoot, "_")
+	if err := mirrorHookEntry(nestedSrc, dstDir, failSymlink); err != nil {
+		t.Fatalf("mirrorHookEntry(dir): %v", err)
+	}
+	for rel, want := range map[string]string{
+		"husky.sh":      "HUSKY=1\n",
+		"sub/nested.sh": "NESTED=2\n",
+	} {
+		b, err := os.ReadFile(filepath.Join(dstDir, filepath.FromSlash(rel)))
+		if err != nil || string(b) != want {
+			t.Fatalf("copied %s = %q (err=%v), want %q", rel, string(b), err, want)
+		}
+	}
+
+	// 3. Dangling symlink skipped without failing when symlinkFn fails.
+	danglingSrc := filepath.Join(srcRoot, "dangling")
+	if err := os.Symlink(filepath.Join(srcRoot, "does-not-exist"), danglingSrc); err != nil {
+		t.Fatalf("create dangling symlink: %v", err)
+	}
+	danglingDst := filepath.Join(dstRoot, "dangling")
+	if err := mirrorHookEntry(danglingSrc, danglingDst, failSymlink); err != nil {
+		t.Fatalf("mirrorHookEntry(dangling) returned error: %v", err)
+	}
+	if _, err := os.Lstat(danglingDst); !os.IsNotExist(err) {
+		t.Fatalf("expected dangling symlink not to be created, err=%v", err)
+	}
+
+	// 4. Symlink cycle hits maxHookCopyDepth error instead of recursing forever.
+	cycleDir := filepath.Join(srcRoot, "cycle")
+	if err := os.MkdirAll(cycleDir, 0o755); err != nil {
+		t.Fatalf("mkdir cycle: %v", err)
+	}
+	if err := os.Symlink(cycleDir, filepath.Join(cycleDir, "loop")); err != nil {
+		t.Fatalf("create symlink cycle: %v", err)
+	}
+	if err := copyFileOrDir(cycleDir, filepath.Join(dstRoot, "cycle-copy")); err == nil {
+		t.Fatalf("expected depth limit error for symlink cycle, got nil")
+	}
+
+	// 5. End-to-end repo.Commit with symlinkFn returning ErrPermission and .husky/_/helper.sh.
+	env := setupTestRepo(t)
+	huskyDir := filepath.Join(env.repoDir, ".husky")
+	mustGit(t, env.repoDir, "config", "core.hooksPath", ".husky")
+	writeFile(t, filepath.Join(huskyDir, "_", "helper.sh"), "HELPER_OK=yes\n", 0o644)
+	writeFile(t, filepath.Join(huskyDir, "pre-commit"),
+		"#!/bin/sh\n. \"$(dirname \"$0\")/_/helper.sh\"\n[ \"$HELPER_OK\" = \"yes\" ] || exit 42\n",
+		0o755,
+	)
+	writeFile(t, filepath.Join(env.repoDir, "fallback.txt"), "copy fallback\n", 0o644)
+	mustGit(t, env.repoDir, "add", "fallback.txt")
+
+	repo, err := Discover(env.repoDir)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	repo.symlinkFn = failSymlink
+
+	var stderr bytes.Buffer
+	code, err := repo.Commit(CommitRequest{
+		AuthorName:  "Ada Lovelace by gpt-5",
+		AuthorEmail: "ada@analytical.engine",
+		Trailers:    []string{"Assisted-by: gpt-5"},
+		Args:        []string{"-m", "feat: commit with symlink copy fallback"},
+		Stderr:      &stderr,
+	})
+	if err != nil || code != 0 {
+		t.Fatalf("repo.Commit with symlink fallback failed: code=%d err=%v stderr=%s", code, err, stderr.String())
+	}
+}
+
+func TestApplyTrailersToFile_StripsStaleManagedTrailersAndPreservesHuman(t *testing.T) {
+	env := setupTestRepo(t)
+	msgFile := filepath.Join(env.repoDir, "COMMIT_EDITMSG")
+	orig := strings.Join([]string{
+		"feat: refactor provenance parser",
+		"",
+		"Body paragraph explaining why.",
+		"",
+		"Signed-off-by: Ada Lovelace <ada@analytical.engine>",
+		"Fixes: #42",
+		"Assisted-by: claude-code:old-model",
+		"X-Agent-Orchestrator: anthropic/claude-opus-4",
+		"X-Agent-Planner: openai/o3",
+		"X-Agent-Implementer: anthropic/claude-sonnet-4",
+		"X-Agent-Reviewer: google/gemini-2.5-pro",
+		"X-Agent-Committer: anthropic/claude-haiku-4",
+		"X-Agent-Harness: claude-code@1.0.0",
+		"",
+		"# Please enter the commit message for your changes.",
+		"",
+	}, "\n")
+	writeFile(t, msgFile, orig, 0o644)
+
+	newTrailers := []string{
+		"Assisted-by: gpt-5",
+		"X-Agent-Implementer: openai/gpt-5",
+	}
+	if err := ApplyTrailersToFile(env.repoDir, msgFile, newTrailers); err != nil {
+		t.Fatalf("ApplyTrailersToFile: %v", err)
+	}
+
+	updatedBytes, err := os.ReadFile(msgFile)
+	if err != nil {
+		t.Fatalf("read msgFile: %v", err)
+	}
+	updated := string(updatedBytes)
+
+	for _, stale := range []string{
+		"old-model",
+		"X-Agent-Orchestrator:",
+		"X-Agent-Planner:",
+		"X-Agent-Reviewer:",
+		"X-Agent-Committer:",
+		"X-Agent-Harness:",
+		"anthropic/claude-sonnet-4",
+	} {
+		if strings.Contains(updated, stale) {
+			t.Errorf("expected stale trailer %q stripped, got:\n%s", stale, updated)
+		}
+	}
+
+	for _, keep := range []string{
+		"Signed-off-by: Ada Lovelace <ada@analytical.engine>",
+		"Fixes: #42",
+		"# Please enter the commit message for your changes.",
+	} {
+		if !strings.Contains(updated, keep) {
+			t.Errorf("expected human trailer/comment %q preserved, got:\n%s", keep, updated)
+		}
+	}
+
+	wantBlock := "Assisted-by: gpt-5\nX-Agent-Implementer: openai/gpt-5"
+	blockIdx := strings.Index(updated, wantBlock)
+	commentIdx := strings.Index(updated, "# Please enter")
+	if blockIdx < 0 {
+		t.Fatalf("expected new trailers in exact order %q, got:\n%s", wantBlock, updated)
+	}
+	if blockIdx > commentIdx {
+		t.Errorf("expected trailers above git comment lines, got:\n%s", updated)
+	}
+}
+
+func TestCommit_AmendReplacesStaleTrailersAndUpdatesAuthor(t *testing.T) {
+	// Verify InspectCommitArgs edge cases first.
+	inspectCases := []struct {
+		name          string
+		args          []string
+		wantAmend     bool
+		wantAuthor    bool
+		wantResetAuth bool
+	}{
+		{"plain amend", []string{"--amend", "--no-edit"}, true, false, false},
+		{"amend inside -m ignored", []string{"-m", "--amend"}, false, false, false},
+		{"amend inside -am ignored", []string{"-am", "--amend"}, false, false, false},
+		{"amend after -- pathspec ignored", []string{"-m", "hi", "--", "--amend"}, false, false, false},
+		{"explicit --author space", []string{"--amend", "--author", "Bob <b@e.com>"}, true, true, false},
+		{"explicit --author equals", []string{"--amend", "--author=Bob <b@e.com>"}, true, true, false},
+		{"author inside -m ignored", []string{"--amend", "-m", "--author"}, true, false, false},
+		{"reset-author detected", []string{"--amend", "--reset-author"}, true, false, true},
+	}
+	for _, tc := range inspectCases {
+		gotAmend, gotAuthor, gotReset := InspectCommitArgs(tc.args)
+		if gotAmend != tc.wantAmend || gotAuthor != tc.wantAuthor || gotReset != tc.wantResetAuth {
+			t.Errorf("InspectCommitArgs(%v) = (%v, %v, %v), want (%v, %v, %v)",
+				tc.args, gotAmend, gotAuthor, gotReset, tc.wantAmend, tc.wantAuthor, tc.wantResetAuth)
+		}
+	}
+
+	env := setupTestRepo(t)
+	repo, err := Discover(env.repoDir)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+
+	// Unborn repo returns HeadAuthorIdentity == false.
+	if _, ok := repo.HeadAuthorIdentity(); ok {
+		t.Fatalf("expected HeadAuthorIdentity false on unborn repo")
+	}
+
+	// 1. Initial AI commit with Planner + Impl + Reviewer + Harness + Signed-off-by (-s).
+	writeFile(t, filepath.Join(env.repoDir, "main.go"), "package main\n", 0o644)
+	mustGit(t, env.repoDir, "add", "main.go")
+
+	code, err := repo.Commit(CommitRequest{
+		AuthorName:  "Ada Lovelace by claude-sonnet-4",
+		AuthorEmail: "ada@analytical.engine",
+		Trailers: []string{
+			"Assisted-by: claude-code:claude-sonnet-4",
+			"X-Agent-Planner: openai/o3",
+			"X-Agent-Implementer: anthropic/claude-sonnet-4",
+			"X-Agent-Reviewer: google/gemini-2.5-pro",
+			"X-Agent-Harness: claude-code@1.0.0",
+		},
+		Args: []string{"-s", "-m", "feat: initial ai commit"},
+	})
+	if err != nil || code != 0 {
+		t.Fatalf("initial Commit failed: code=%d err=%v", code, err)
+	}
+
+	headIdent, ok := repo.HeadAuthorIdentity()
+	if !ok || headIdent.Name != "Ada Lovelace by claude-sonnet-4" || headIdent.Email != "ada@analytical.engine" {
+		t.Fatalf("HeadAuthorIdentity = (%+v, %v)", headIdent, ok)
+	}
+
+	origAuthorDate := mustGit(t, env.repoDir, "log", "-1", "--format=%aI")
+
+	// 2. Amend with only a new Implementer: stale Planner/Reviewer/Harness must be cleared,
+	// Signed-off-by and AuthorDate preserved, and Author updated without duplicate "by".
+	code, err = repo.Commit(CommitRequest{
+		AuthorName:  "Ada Lovelace by gpt-5",
+		AuthorEmail: "ada@analytical.engine",
+		Trailers: []string{
+			"Assisted-by: gpt-5",
+			"X-Agent-Implementer: openai/gpt-5",
+		},
+		Args: []string{"--amend", "--no-edit"},
+	})
+	if err != nil || code != 0 {
+		t.Fatalf("amend Commit failed: code=%d err=%v", code, err)
+	}
+
+	amendAuthor := mustGit(t, env.repoDir, "log", "-1", "--format=%an|%ae|%aI")
+	wantAmendAuthor := "Ada Lovelace by gpt-5|ada@analytical.engine|" + origAuthorDate
+	if amendAuthor != wantAmendAuthor {
+		t.Errorf("amended author = %q, want %q", amendAuthor, wantAmendAuthor)
+	}
+
+	amendBody := mustGit(t, env.repoDir, "log", "-1", "--format=%B")
+	for _, stale := range []string{"X-Agent-Planner:", "X-Agent-Reviewer:", "X-Agent-Harness:", "claude-sonnet-4"} {
+		if strings.Contains(amendBody, stale) {
+			t.Errorf("amended commit still has stale %q:\n%s", stale, amendBody)
+		}
+	}
+	for _, want := range []string{
+		"Signed-off-by: Ada Lovelace <ada@analytical.engine>",
+		"Assisted-by: gpt-5",
+		"X-Agent-Implementer: openai/gpt-5",
+	} {
+		if !strings.Contains(amendBody, want) {
+			t.Errorf("amended commit missing %q:\n%s", want, amendBody)
+		}
+	}
+
+	// 3. Amend with ClearManagedTrailers: all 7 managed AI trailers removed, Signed-off-by kept,
+	// Author restored to pure human name.
+	code, err = repo.Commit(CommitRequest{
+		AuthorName:           "Ada Lovelace",
+		AuthorEmail:          "ada@analytical.engine",
+		ClearManagedTrailers: true,
+		Args:                 []string{"--amend", "--no-edit"},
+	})
+	if err != nil || code != 0 {
+		t.Fatalf("clear-trailers amend Commit failed: code=%d err=%v", code, err)
+	}
+
+	clearedAuthor := mustGit(t, env.repoDir, "log", "-1", "--format=%an|%ae")
+	if clearedAuthor != "Ada Lovelace|ada@analytical.engine" {
+		t.Errorf("cleared author = %q, want Ada Lovelace|ada@analytical.engine", clearedAuthor)
+	}
+	clearedBody := mustGit(t, env.repoDir, "log", "-1", "--format=%B")
+	for _, key := range managedTrailerKeys {
+		if strings.Contains(clearedBody, key+":") {
+			t.Errorf("expected managed trailer %q cleared, got:\n%s", key, clearedBody)
+		}
+	}
+	if !strings.Contains(clearedBody, "Signed-off-by: Ada Lovelace <ada@analytical.engine>") {
+		t.Errorf("expected Signed-off-by preserved after ClearManagedTrailers, got:\n%s", clearedBody)
+	}
+}
+
+func TestRepo_LookupEnvInjection(t *testing.T) {
+	env := setupTestRepo(t)
+	mustGit(t, env.repoDir, "config", "--unset", "user.name")
+	mustGit(t, env.repoDir, "config", "--unset", "user.email")
+	mustGit(t, env.repoDir, "config", "core.hooksPath", "~/injected-hooks")
+
+	repo, err := Discover(env.repoDir)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+
+	injectedHome := filepath.Join(env.root, "virtual-home")
+	injectedEnv := map[string]string{
+		"GIT_AUTHOR_NAME":  "Injected Author",
+		"GIT_AUTHOR_EMAIL": "injected@example.com",
+		"HOME":             injectedHome,
+		"USERPROFILE":      injectedHome,
+	}
+	repo.LookupEnv = func(key string) (string, bool) {
+		v, ok := injectedEnv[key]
+		return v, ok
+	}
+
+	ident, err := repo.UserIdentity()
+	if err != nil {
+		t.Fatalf("UserIdentity: %v", err)
+	}
+	if ident.Name != "Injected Author" || ident.Email != "injected@example.com" {
+		t.Errorf("UserIdentity = %+v, want Injected Author <injected@example.com>", ident)
+	}
+
+	hooksDir, err := repo.EffectiveHooksDir()
+	if err != nil {
+		t.Fatalf("EffectiveHooksDir: %v", err)
+	}
+	wantHooksDir := filepath.Join(injectedHome, "injected-hooks")
+	if hooksDir != wantHooksDir {
+		t.Errorf("EffectiveHooksDir = %q, want %q", hooksDir, wantHooksDir)
+	}
+}

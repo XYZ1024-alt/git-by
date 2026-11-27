@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -443,10 +444,243 @@ func TestRenderJSON_Terminal_And_SVG(t *testing.T) {
 	validateStrictSVG(t, svgBytes)
 
 	svgStr := string(svgBytes)
-	for _, themeToken := range []string{"#0d1117", "#161b22", "#30363d", "Top Implementer Models", "Top Planner Models"} {
+	for _, themeToken := range []string{
+		"#0d1117",
+		"#161b22",
+		"#30363d",
+		`viewBox="0 0 840 `,
+		"TOP IMPLEMENTERS",
+		"TOP PLANNERS",
+		"X-Agent-Implementer",
+		"X-Agent-Planner",
+		"HARNESSES",
+		"pi",
+		"prefers-color-scheme: light",
+	} {
 		if !strings.Contains(svgStr, themeToken) {
 			t.Errorf("SVG missing expected token %q", themeToken)
 		}
+	}
+	if strings.Contains(svgStr, "textLength") {
+		t.Errorf("SVG should not contain hardcoded textLength attributes")
+	}
+}
+
+func parseSVGDimensions(t *testing.T, data []byte) (width, height int) {
+	t.Helper()
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	dec.Strict = true
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("invalid SVG XML while parsing dimensions: %v", err)
+		}
+		start, ok := tok.(xml.StartElement)
+		if !ok || start.Name.Local != "svg" {
+			continue
+		}
+		var wStr, hStr string
+		for _, attr := range start.Attr {
+			switch attr.Name.Local {
+			case "width":
+				wStr = attr.Value
+			case "height":
+				hStr = attr.Value
+			}
+		}
+		w, err := strconv.Atoi(wStr)
+		if err != nil {
+			t.Fatalf("invalid svg width %q: %v", wStr, err)
+		}
+		h, err := strconv.Atoi(hStr)
+		if err != nil {
+			t.Fatalf("invalid svg height %q: %v", hStr, err)
+		}
+		return w, h
+	}
+	t.Fatal("svg root element not found")
+	return 0, 0
+}
+
+func TestParseBadgeTheme(t *testing.T) {
+	t.Parallel()
+
+	valid := []struct {
+		in   string
+		want BadgeTheme
+	}{
+		{"", ThemeAuto},
+		{"   ", ThemeAuto},
+		{"auto", ThemeAuto},
+		{"AUTO", ThemeAuto},
+		{"dark", ThemeDark},
+		{"Dark", ThemeDark},
+		{"light", ThemeLight},
+		{"Light", ThemeLight},
+	}
+	for _, tc := range valid {
+		got, err := ParseBadgeTheme(tc.in)
+		if err != nil {
+			t.Errorf("ParseBadgeTheme(%q) returned unexpected error: %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("ParseBadgeTheme(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+
+	for _, bad := range []string{"neon", "system", "solarized", "dark-mode"} {
+		if got, err := ParseBadgeTheme(bad); err == nil {
+			t.Errorf("ParseBadgeTheme(%q) = %q, expected error", bad, got)
+		}
+	}
+}
+
+func TestRenderBadgeSVGWithTheme_AutoDarkLightAndDynamicHeight(t *testing.T) {
+	t.Parallel()
+
+	oneRowReport := &Report{
+		RepoName:     "git-by",
+		TotalCommits: 100,
+		TotalLines:   4200,
+		Human: Breakdown{
+			Commits:       30,
+			CommitPercent: 30,
+			Additions:     900,
+			Deletions:     300,
+			LinesPercent:  28.57,
+		},
+		AI: Breakdown{
+			Commits:       70,
+			CommitPercent: 70,
+			Additions:     2400,
+			Deletions:     600,
+			LinesPercent:  71.43,
+		},
+		Implementers: []ModelCount{
+			{Model: "anthropic/claude-sonnet-4", Commits: 70, Percent: 100},
+		},
+		Planners: []ModelCount{
+			{Model: "openai/o3", Commits: 40, Percent: 57.14},
+		},
+		Harnesses: []ModelCount{
+			{Model: "claude-code@1.2.0", Commits: 50, Percent: 71.43},
+			{Model: "pi@1.0.0", Commits: 20, Percent: 28.57},
+			{Model: "claude-code@2.0.0", Commits: 10, Percent: 14.29},
+		},
+	}
+
+	// 1. ThemeAuto
+	autoBytes, err := RenderBadgeSVGWithTheme(oneRowReport, ThemeAuto)
+	if err != nil {
+		t.Fatalf("RenderBadgeSVGWithTheme(auto) failed: %v", err)
+	}
+	validateStrictSVG(t, autoBytes)
+	autoStr := string(autoBytes)
+	for _, want := range []string{
+		"#0d1117",
+		"#ffffff",
+		"@media (prefers-color-scheme: light)",
+		`stop-color="#58a6ff"`,
+		"HARNESSES",
+		"claude-code · pi",
+		"X-Agent-Harness",
+		"GPG/SSH Intact · Worktree Safe · Zero Fake Co-Authors",
+	} {
+		if !strings.Contains(autoStr, want) {
+			t.Errorf("auto SVG missing %q", want)
+		}
+	}
+	if strings.Contains(autoStr, "textLength") {
+		t.Errorf("auto SVG must not contain textLength")
+	}
+	if strings.Contains(autoStr, "@1.2.0") || strings.Contains(autoStr, "@2.0.0") {
+		t.Errorf("auto SVG should strip @version from harnesses")
+	}
+
+	// 2. ThemeDark
+	darkBytes, err := RenderBadgeSVGWithTheme(oneRowReport, ThemeDark)
+	if err != nil {
+		t.Fatalf("RenderBadgeSVGWithTheme(dark) failed: %v", err)
+	}
+	validateStrictSVG(t, darkBytes)
+	darkStr := string(darkBytes)
+	for _, want := range []string{"#0d1117", "#161b22", `stop-color="#58a6ff"`} {
+		if !strings.Contains(darkStr, want) {
+			t.Errorf("dark SVG missing %q", want)
+		}
+	}
+	for _, forbid := range []string{"@media", "prefers-color-scheme", "#ffffff", "textLength"} {
+		if strings.Contains(darkStr, forbid) {
+			t.Errorf("dark SVG must not contain %q", forbid)
+		}
+	}
+
+	// 3. ThemeLight
+	lightBytes, err := RenderBadgeSVGWithTheme(oneRowReport, ThemeLight)
+	if err != nil {
+		t.Fatalf("RenderBadgeSVGWithTheme(light) failed: %v", err)
+	}
+	validateStrictSVG(t, lightBytes)
+	lightStr := string(lightBytes)
+	for _, want := range []string{"#ffffff", "#f6f8fa", "#1f2328", `stop-color="#0969da"`} {
+		if !strings.Contains(lightStr, want) {
+			t.Errorf("light SVG missing %q", want)
+		}
+	}
+	for _, forbid := range []string{"@media", "prefers-color-scheme", "#0d1117", "textLength"} {
+		if strings.Contains(lightStr, forbid) {
+			t.Errorf("light SVG must not contain %q", forbid)
+		}
+	}
+
+	// 4. Invalid theme fails fast
+	if _, err := RenderBadgeSVGWithTheme(oneRowReport, BadgeTheme("neon")); err == nil {
+		t.Fatalf("expected error for invalid badge theme")
+	}
+
+	// 5. Dynamic height: 6-row report (--top 6) is exactly 5 * 32 = 160 px taller than 1-row report
+	sixRowReport := *oneRowReport
+	sixRowReport.Implementers = []ModelCount{
+		{Model: "anthropic/claude-sonnet-4", Commits: 25, Percent: 35.7},
+		{Model: "openai/gpt-5", Commits: 15, Percent: 21.4},
+		{Model: "google/gemini-2.5-pro", Commits: 10, Percent: 14.3},
+		{Model: "deepseek/deepseek-v4", Commits: 8, Percent: 11.4},
+		{Model: "openai/o3", Commits: 7, Percent: 10.0},
+		{Model: "anthropic/claude-opus-4", Commits: 5, Percent: 7.1},
+	}
+	sixBytes, err := RenderBadgeSVGWithTheme(&sixRowReport, ThemeAuto)
+	if err != nil {
+		t.Fatalf("RenderBadgeSVGWithTheme(6 rows) failed: %v", err)
+	}
+	validateStrictSVG(t, sixBytes)
+
+	w1, h1 := parseSVGDimensions(t, autoBytes)
+	w6, h6 := parseSVGDimensions(t, sixBytes)
+	if w1 != 840 || w6 != 840 {
+		t.Errorf("SVG widths = (%d, %d), want (840, 840)", w1, w6)
+	}
+	if diff := h6 - h1; diff != 5*32 {
+		t.Errorf("6-row height (%d) - 1-row height (%d) = %d, want %d", h6, h1, diff, 5*32)
+	}
+
+	// 6. Empty report renders empty states cleanly and validates as strict XML
+	emptyBytes, err := RenderBadgeSVGWithTheme(&Report{RepoName: "empty-repo"}, ThemeAuto)
+	if err != nil {
+		t.Fatalf("RenderBadgeSVGWithTheme(empty) failed: %v", err)
+	}
+	validateStrictSVG(t, emptyBytes)
+	emptyStr := string(emptyBytes)
+	for _, want := range []string{"No models recorded yet", "none recorded"} {
+		if !strings.Contains(emptyStr, want) {
+			t.Errorf("empty SVG missing %q", want)
+		}
+	}
+	if strings.Contains(emptyStr, "textLength") {
+		t.Errorf("empty SVG must not contain textLength")
 	}
 }
 

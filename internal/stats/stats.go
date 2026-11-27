@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -55,6 +56,15 @@ type Report struct {
 const (
 	commitStartMarker = "\x00GITBY_COMMIT_START\x00"
 	bodyEndMarker     = "\x00GITBY_BODY_END\x00"
+
+	streamBufSize      = 64 * 1024
+	maxRetainedBodyCap = 256 * 1024
+)
+
+var (
+	commitStartMarkerBytes = []byte(commitStartMarker)
+	bodyEndMarkerBytes     = []byte(bodyEndMarker)
+	numstatDashBytes       = []byte("-")
 )
 
 // Collect analyzes non-merge commit history in repoDir and computes AI provenance statistics.
@@ -110,22 +120,6 @@ func Collect(repoDir string, opts Options) (*Report, error) {
 		args = append(args, "--since="+since)
 	}
 
-	stdout, stderr, err := runGit(absRepoDir, args...)
-	if err != nil {
-		if isEmptyRepoStderr(stderr) {
-			return report, nil
-		}
-		msg := strings.TrimSpace(stderr)
-		if msg == "" {
-			msg = err.Error()
-		}
-		return nil, fmt.Errorf("git log failed: %s", msg)
-	}
-
-	if len(stdout) == 0 {
-		return report, nil
-	}
-
 	implCounts := make(map[string]int)
 	planCounts := make(map[string]int)
 	orchCounts := make(map[string]int)
@@ -133,8 +127,7 @@ func Collect(repoDir string, opts Options) (*Report, error) {
 	committerCounts := make(map[string]int)
 	harnessCounts := make(map[string]int)
 
-	records := parseCommitRecords(stdout)
-	for _, rec := range records {
+	stderr, err := streamGitLog(absRepoDir, args, func(rec commitRecord) {
 		report.TotalCommits++
 		commitLines := rec.additions + rec.deletions
 		report.TotalLines += commitLines
@@ -168,6 +161,20 @@ func Collect(repoDir string, opts Options) (*Report, error) {
 			report.Human.Additions += rec.additions
 			report.Human.Deletions += rec.deletions
 		}
+	})
+	if err != nil {
+		if isEmptyRepoStderr(stderr) {
+			return report, nil
+		}
+		msg := strings.TrimSpace(stderr)
+		if msg == "" {
+			msg = err.Error()
+		}
+		return nil, fmt.Errorf("git log failed: %s", msg)
+	}
+
+	if report.TotalCommits == 0 {
+		return report, nil
 	}
 
 	if report.TotalCommits > 0 {
@@ -199,71 +206,254 @@ type commitRecord struct {
 	deletions  int
 }
 
-func parseCommitRecords(raw []byte) []commitRecord {
-	text := string(raw)
-	chunks := strings.Split(text, commitStartMarker)
-	if len(chunks) <= 1 {
+func streamGitLog(dir string, args []string, onRecord func(commitRecord)) (stderr string, err error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
+
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", err
+	}
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+
+	parseErr := streamCommitRecords(stdoutPipe, onRecord)
+	if parseErr != nil {
+		// Drain any unread output so git cannot block writing to the pipe before Wait.
+		_, _ = io.Copy(io.Discard, stdoutPipe)
+	}
+
+	waitErr := cmd.Wait()
+	if waitErr != nil {
+		return stderrBuf.String(), waitErr
+	}
+	if parseErr != nil {
+		return stderrBuf.String(), parseErr
+	}
+	return stderrBuf.String(), nil
+}
+
+func streamCommitRecords(r io.Reader, onRecord func(commitRecord)) error {
+	br := bufio.NewReaderSize(r, streamBufSize)
+
+	found, err := readUntilMarker(br, commitStartMarkerBytes, nil)
+	if err != nil {
+		return err
+	}
+	if !found {
 		return nil
 	}
 
-	records := make([]commitRecord, 0, len(chunks)-1)
-	for _, chunk := range chunks[1:] {
-		bodyEndIdx := strings.Index(chunk, bodyEndMarker)
-		if bodyEndIdx < 0 {
-			continue
-		}
-		headerAndBody := chunk[:bodyEndIdx]
-		numstatRaw := chunk[bodyEndIdx+len(bodyEndMarker):]
+	var headerBodyBuf bytes.Buffer
+	var lineBuf bytes.Buffer
 
-		firstNul := strings.IndexByte(headerAndBody, '\x00')
-		if firstNul < 0 {
-			continue
+	for {
+		headerBodyBuf.Reset()
+		found, err := readUntilMarker(br, bodyEndMarkerBytes, &headerBodyBuf)
+		if err != nil {
+			return err
 		}
-		hash := headerAndBody[:firstNul]
-		rest := headerAndBody[firstNul+1:]
-
-		secondNul := strings.IndexByte(rest, '\x00')
-		if secondNul < 0 {
-			continue
+		if !found {
+			return nil
 		}
-		authorName := rest[:secondNul]
-		body := rest[secondNul+1:]
 
-		additions, deletions := parseNumstat(numstatRaw)
-		records = append(records, commitRecord{
-			hash:       hash,
-			authorName: authorName,
-			body:       body,
-			additions:  additions,
-			deletions:  deletions,
-		})
+		raw := headerBodyBuf.Bytes()
+		valid := false
+		var hash, authorName, body string
+		if firstNul := bytes.IndexByte(raw, '\x00'); firstNul >= 0 {
+			rest := raw[firstNul+1:]
+			if secondNul := bytes.IndexByte(rest, '\x00'); secondNul >= 0 {
+				hash = string(raw[:firstNul])
+				authorName = string(rest[:secondNul])
+				body = string(rest[secondNul+1:])
+				valid = true
+			}
+		}
+
+		// Release oversized backing buffers after processing an unusually large commit.
+		if headerBodyBuf.Cap() > maxRetainedBodyCap {
+			headerBodyBuf = bytes.Buffer{}
+		}
+
+		additions, deletions, hasNext, err := streamNumstatUntilNextCommit(br, &lineBuf)
+		if lineBuf.Cap() > maxRetainedBodyCap {
+			lineBuf = bytes.Buffer{}
+		}
+		if err != nil {
+			return err
+		}
+
+		if valid && onRecord != nil {
+			onRecord(commitRecord{
+				hash:       hash,
+				authorName: authorName,
+				body:       body,
+				additions:  additions,
+				deletions:  deletions,
+			})
+		}
+
+		if !hasNext {
+			return nil
+		}
 	}
-	return records
 }
 
-func parseNumstat(raw string) (additions int, deletions int) {
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimRight(line, "\r")
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) < 3 {
-			continue
-		}
-		if parts[0] == "-" || parts[1] == "-" {
-			// Binary file entry; skip line counts.
-			continue
-		}
-		add, errAdd := strconv.Atoi(strings.TrimSpace(parts[0]))
-		del, errDel := strconv.Atoi(strings.TrimSpace(parts[1]))
-		if errAdd != nil || errDel != nil {
-			continue
-		}
-		additions += add
-		deletions += del
+func readUntilMarker(br *bufio.Reader, marker []byte, dst *bytes.Buffer) (found bool, err error) {
+	if len(marker) == 0 {
+		return true, nil
 	}
-	return additions, deletions
+	first := marker[0]
+	rest := marker[1:]
+
+	for {
+		chunk, err := br.ReadSlice(first)
+		if errors.Is(err, bufio.ErrBufferFull) {
+			if dst != nil {
+				dst.Write(chunk)
+			}
+			continue
+		}
+		if err == nil {
+			if dst != nil && len(chunk) > 1 {
+				dst.Write(chunk[:len(chunk)-1])
+			}
+			if len(rest) == 0 {
+				return true, nil
+			}
+			peeked, peekErr := br.Peek(len(rest))
+			if len(peeked) == len(rest) && bytes.Equal(peeked, rest) {
+				if _, discErr := br.Discard(len(rest)); discErr != nil {
+					return false, discErr
+				}
+				return true, nil
+			}
+			if dst != nil {
+				dst.WriteByte(first)
+			}
+			if peekErr != nil && !errors.Is(peekErr, io.EOF) {
+				return false, peekErr
+			}
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			if dst != nil && len(chunk) > 0 {
+				dst.Write(chunk)
+			}
+			return false, nil
+		}
+		return false, err
+	}
+}
+
+func streamNumstatUntilNextCommit(br *bufio.Reader, lineBuf *bytes.Buffer) (additions int, deletions int, hasNext bool, err error) {
+	lineBuf.Reset()
+
+	for {
+		if br.Buffered() == 0 {
+			if _, peekErr := br.Peek(1); peekErr != nil {
+				if errors.Is(peekErr, io.EOF) {
+					if lineBuf.Len() > 0 {
+						a, d := parseNumstatLine(lineBuf.Bytes())
+						additions += a
+						deletions += d
+						lineBuf.Reset()
+					}
+					return additions, deletions, false, nil
+				}
+				return additions, deletions, false, peekErr
+			}
+		}
+
+		avail, _ := br.Peek(br.Buffered())
+		nlIdx := bytes.IndexByte(avail, '\n')
+		nulIdx := bytes.IndexByte(avail, '\x00')
+
+		if nulIdx >= 0 && (nlIdx < 0 || nulIdx < nlIdx) {
+			if nulIdx > 0 {
+				lineBuf.Write(avail[:nulIdx])
+				if _, discErr := br.Discard(nulIdx); discErr != nil {
+					return additions, deletions, false, discErr
+				}
+			}
+			peeked, mErr := br.Peek(len(commitStartMarkerBytes))
+			if len(peeked) == len(commitStartMarkerBytes) && bytes.Equal(peeked, commitStartMarkerBytes) {
+				if lineBuf.Len() > 0 {
+					a, d := parseNumstatLine(lineBuf.Bytes())
+					additions += a
+					deletions += d
+					lineBuf.Reset()
+				}
+				if _, discErr := br.Discard(len(commitStartMarkerBytes)); discErr != nil {
+					return additions, deletions, false, discErr
+				}
+				return additions, deletions, true, nil
+			}
+			if mErr != nil && !errors.Is(mErr, io.EOF) {
+				return additions, deletions, false, mErr
+			}
+			lineBuf.WriteByte('\x00')
+			if _, discErr := br.Discard(1); discErr != nil {
+				return additions, deletions, false, discErr
+			}
+			continue
+		}
+
+		if nlIdx >= 0 {
+			if lineBuf.Len() == 0 {
+				a, d := parseNumstatLine(avail[:nlIdx])
+				additions += a
+				deletions += d
+			} else {
+				lineBuf.Write(avail[:nlIdx])
+				a, d := parseNumstatLine(lineBuf.Bytes())
+				additions += a
+				deletions += d
+				lineBuf.Reset()
+			}
+			if _, discErr := br.Discard(nlIdx + 1); discErr != nil {
+				return additions, deletions, false, discErr
+			}
+			continue
+		}
+
+		lineBuf.Write(avail)
+		if _, discErr := br.Discard(len(avail)); discErr != nil {
+			return additions, deletions, false, discErr
+		}
+	}
+}
+
+func parseNumstatLine(line []byte) (additions int, deletions int) {
+	line = bytes.TrimRight(line, "\r")
+	if len(bytes.TrimSpace(line)) == 0 {
+		return 0, 0
+	}
+	firstTab := bytes.IndexByte(line, '\t')
+	if firstTab < 0 {
+		return 0, 0
+	}
+	rest := line[firstTab+1:]
+	secondTab := bytes.IndexByte(rest, '\t')
+	if secondTab < 0 {
+		return 0, 0
+	}
+	addBytes := bytes.TrimSpace(line[:firstTab])
+	delBytes := bytes.TrimSpace(rest[:secondTab])
+	if bytes.Equal(addBytes, numstatDashBytes) || bytes.Equal(delBytes, numstatDashBytes) {
+		return 0, 0
+	}
+	add, errAdd := strconv.Atoi(string(addBytes))
+	del, errDel := strconv.Atoi(string(delBytes))
+	if errAdd != nil || errDel != nil {
+		return 0, 0
+	}
+	return add, del
 }
 
 type commitProvenance struct {
@@ -687,5 +877,3 @@ func normalizeReport(r *Report) *Report {
 	}
 	return &cp
 }
-
-var _ io.Writer

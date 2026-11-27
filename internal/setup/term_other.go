@@ -22,3 +22,7 @@ func readEscapeTail(_ io.Reader, _ []byte) (int, bool) {
 func termHeight(_ io.Writer) int {
 	return 0
 }
+
+func termWidth(_ io.Writer) int {
+	return 0
+}

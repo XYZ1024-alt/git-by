@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/XYZ1024-alt/git-by/internal/git"
@@ -15,7 +16,7 @@ func (a *App) cmdCommit(args []string) int {
 		return 0
 	}
 
-	cliMeta, gitArgs, err := parseCommitArgs(args)
+	cliMeta, clearTrailers, gitArgs, err := parseCommitArgs(args)
 	if err != nil {
 		fmt.Fprintf(a.stderr, "git-by commit: %v\n", err)
 		return 1
@@ -26,6 +27,7 @@ func (a *App) cmdCommit(args []string) int {
 		fmt.Fprintf(a.stderr, "git-by commit: %v\n", err)
 		return 1
 	}
+	repo.LookupEnv = a.lookupEnv
 
 	sessionPath, err := repo.SessionPath()
 	if err != nil {
@@ -33,38 +35,64 @@ func (a *App) cmdCommit(args []string) int {
 		return 1
 	}
 
-	fileMeta, _, err := session.Load(sessionPath)
-	if err != nil {
-		fmt.Fprintf(a.stderr, "git-by commit: failed to load session: %v\n", err)
-		return 1
-	}
-
-	envMeta := session.FromEnv(a.lookupEnv)
-	meta := session.Merge(session.Merge(fileMeta, envMeta), cliMeta)
-
-	ident, err := repo.UserIdentity()
+	userIdent, err := repo.UserIdentity()
 	if err != nil {
 		fmt.Fprintf(a.stderr, "git-by commit: failed to resolve git user identity: %v\n", err)
 		return 1
 	}
 
-	authorName := meta.FormatAuthorName(ident.Name)
-	authorEmail := ident.Email
-
-	rawTrailers := meta.Trailers()
-	trailers := make([]string, 0, len(rawTrailers))
-	for _, t := range rawTrailers {
-		trailers = append(trailers, t.String())
+	ident := userIdent
+	hasAmend, hasExplicitAuthor, hasResetAuthor := git.InspectCommitArgs(gitArgs)
+	if hasAmend && !hasExplicitAuthor && !hasResetAuthor {
+		if headIdent, ok := repo.HeadAuthorIdentity(); ok {
+			ident = headIdent
+			if ident.Name == "" {
+				ident.Name = userIdent.Name
+			}
+			if ident.Email == "" {
+				ident.Email = userIdent.Email
+			}
+		}
 	}
 
+	var (
+		authorName string
+		trailers   []string
+	)
+	if clearTrailers {
+		authorName = provenance.StripAuthorAttribution(ident.Name)
+		if authorName == "" && userIdent.Name != "" {
+			authorName = provenance.StripAuthorAttribution(userIdent.Name)
+		}
+	} else {
+		fileMeta, _, err := session.Load(sessionPath)
+		if err != nil {
+			fmt.Fprintf(a.stderr, "git-by commit: failed to load session: %v\n", err)
+			return 1
+		}
+
+		envMeta := session.FromEnv(a.lookupEnv)
+		meta := session.Merge(session.Merge(fileMeta, envMeta), cliMeta)
+
+		authorName = meta.FormatAuthorName(ident.Name)
+		rawTrailers := meta.Trailers()
+		trailers = make([]string, 0, len(rawTrailers))
+		for _, t := range rawTrailers {
+			trailers = append(trailers, t.String())
+		}
+	}
+
+	authorEmail := ident.Email
+
 	exitCode, err := repo.Commit(git.CommitRequest{
-		AuthorName:  authorName,
-		AuthorEmail: authorEmail,
-		Trailers:    trailers,
-		Args:        gitArgs,
-		Stdin:       a.stdin,
-		Stdout:      a.stdout,
-		Stderr:      a.stderr,
+		AuthorName:           authorName,
+		AuthorEmail:          authorEmail,
+		Trailers:             trailers,
+		ClearManagedTrailers: clearTrailers,
+		Args:                 gitArgs,
+		Stdin:                a.stdin,
+		Stdout:               a.stdout,
+		Stderr:               a.stderr,
 	})
 	if err != nil {
 		fmt.Fprintf(a.stderr, "git-by commit: %v\n", err)
@@ -84,8 +112,9 @@ func (a *App) cmdCommit(args []string) int {
 // parseCommitArgs strips git-by specific flags appearing before "--" while
 // preserving all native git commit flags and their option arguments verbatim
 // in exact order.
-func parseCommitArgs(args []string) (provenance.Metadata, []string, error) {
+func parseCommitArgs(args []string) (provenance.Metadata, bool, []string, error) {
 	var cliMeta provenance.Metadata
+	var clearTrailers bool
 	gitArgs := make([]string, 0, len(args))
 
 	for i := 0; i < len(args); i++ {
@@ -97,17 +126,31 @@ func parseCommitArgs(args []string) (provenance.Metadata, []string, error) {
 			break
 		}
 
+		if tok == "--clear-trailers" {
+			clearTrailers = true
+			continue
+		}
+		if strings.HasPrefix(tok, "--clear-trailers=") {
+			rawVal := strings.TrimPrefix(tok, "--clear-trailers=")
+			b, err := strconv.ParseBool(rawVal)
+			if err != nil {
+				return provenance.Metadata{}, false, nil, fmt.Errorf("invalid boolean for --clear-trailers: %q", rawVal)
+			}
+			clearTrailers = b
+			continue
+		}
+
 		if flagName, inlineVal, hasInline, isGitBy := matchGitByCommitFlag(tok); isGitBy {
 			val := inlineVal
 			if !hasInline {
 				if i+1 >= len(args) {
-					return provenance.Metadata{}, nil, fmt.Errorf("flag %s requires a value", flagName)
+					return provenance.Metadata{}, false, nil, fmt.Errorf("flag %s requires a value", flagName)
 				}
 				i++
 				val = args[i]
 			}
 			if err := applyCLICommitFlag(&cliMeta, flagName, val); err != nil {
-				return provenance.Metadata{}, nil, err
+				return provenance.Metadata{}, false, nil, err
 			}
 			continue
 		}
@@ -123,7 +166,11 @@ func parseCommitArgs(args []string) (provenance.Metadata, []string, error) {
 		gitArgs = append(gitArgs, tok)
 	}
 
-	return cliMeta, gitArgs, nil
+	if clearTrailers && !cliMeta.IsEmpty() {
+		return provenance.Metadata{}, false, nil, fmt.Errorf("--clear-trailers cannot be combined with provenance flags")
+	}
+
+	return cliMeta, clearTrailers, gitArgs, nil
 }
 
 func matchGitByCommitFlag(tok string) (flagName string, val string, hasInline bool, ok bool) {

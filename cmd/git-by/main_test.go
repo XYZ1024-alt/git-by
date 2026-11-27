@@ -1083,3 +1083,262 @@ func TestSetupInteractiveAppFlowsYesFlagAndCancel(t *testing.T) {
 		}
 	}
 }
+
+func TestStatsBadgeThemeCLI(t *testing.T) {
+	env := newTestRepo(t)
+	repo := env.repoDir
+
+	env.writeFile(repo, "human.txt", "line1\nline2\n")
+	env.mustGit(repo, nil, "add", "human.txt")
+	env.mustGit(repo, nil, "commit", "-m", "docs: human commit")
+
+	env.writeFile(repo, "ai.go", "package ai\n\nfunc Run() {}\n")
+	env.mustGit(repo, nil, "add", "ai.go")
+	env.mustRunApp(repo, nil,
+		"commit",
+		"--plan", "openai/o3",
+		"--impl", "anthropic/claude-sonnet-4",
+		"--harness", "pi@1.0.0",
+		"-m", "feat: ai commit",
+	)
+
+	checkStrictXML := func(path string) string {
+		t.Helper()
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read SVG %s: %v", path, err)
+		}
+		dec := xml.NewDecoder(bytes.NewReader(data))
+		dec.Strict = true
+		for {
+			_, err := dec.Token()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("SVG %s is not strict XML: %v\n%s", path, err, string(data))
+			}
+		}
+		return string(data)
+	}
+
+	// 1) --theme dark
+	darkRel := filepath.Join("badges", "dark.svg")
+	env.mustRunApp(repo, map[string]string{"NO_COLOR": "1"}, "stats", "--badge", darkRel, "--theme", "dark")
+	darkSVG := checkStrictXML(filepath.Join(repo, darkRel))
+	for _, want := range []string{`viewBox="0 0 840 `, "#0d1117", "#161b22", "HARNESSES", "pi"} {
+		if !strings.Contains(darkSVG, want) {
+			t.Fatalf("dark CLI SVG missing %q", want)
+		}
+	}
+	for _, forbid := range []string{"@media", "prefers-color-scheme", "#ffffff", "textLength"} {
+		if strings.Contains(darkSVG, forbid) {
+			t.Fatalf("dark CLI SVG must not contain %q", forbid)
+		}
+	}
+
+	// 2) --theme=light
+	lightRel := filepath.Join("badges", "light.svg")
+	env.mustRunApp(repo, map[string]string{"NO_COLOR": "1"}, "stats", "--badge", lightRel, "--theme=light")
+	lightSVG := checkStrictXML(filepath.Join(repo, lightRel))
+	for _, want := range []string{`viewBox="0 0 840 `, "#ffffff", "#f6f8fa", "#1f2328"} {
+		if !strings.Contains(lightSVG, want) {
+			t.Fatalf("light CLI SVG missing %q", want)
+		}
+	}
+	for _, forbid := range []string{"@media", "prefers-color-scheme", "#0d1117", "textLength"} {
+		if strings.Contains(lightSVG, forbid) {
+			t.Fatalf("light CLI SVG must not contain %q", forbid)
+		}
+	}
+
+	// 3) default auto theme
+	autoRel := filepath.Join("badges", "auto.svg")
+	env.mustRunApp(repo, map[string]string{"NO_COLOR": "1"}, "stats", "--badge", autoRel)
+	autoSVG := checkStrictXML(filepath.Join(repo, autoRel))
+	for _, want := range []string{`viewBox="0 0 840 `, "#0d1117", "#ffffff", "@media (prefers-color-scheme: light)", "HARNESSES", "pi"} {
+		if !strings.Contains(autoSVG, want) {
+			t.Fatalf("auto CLI SVG missing %q", want)
+		}
+	}
+	if strings.Contains(autoSVG, "textLength") {
+		t.Fatalf("auto CLI SVG must not contain textLength")
+	}
+
+	// 4) invalid and missing --theme values return exit code 1
+	badRel := filepath.Join("badges", "bad.svg")
+	if code, _, errOut := env.runApp(repo, nil, "stats", "--badge", badRel, "--theme", "neon"); code != 1 {
+		t.Fatalf("expected exit 1 for --theme neon, got %d (stderr: %s)", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(repo, badRel)); !os.IsNotExist(err) {
+		t.Fatalf("invalid --theme neon should not create badge file, err=%v", err)
+	}
+	if code, _, errOut := env.runApp(repo, nil, "stats", "--theme"); code != 1 {
+		t.Fatalf("expected exit 1 for missing --theme value, got %d (stderr: %s)", code, errOut)
+	}
+	if code, _, errOut := env.runApp(repo, nil, "stats", "--theme="); code != 1 {
+		t.Fatalf("expected exit 1 for empty --theme= value, got %d (stderr: %s)", code, errOut)
+	}
+
+	// 5) stats --help documents --theme
+	helpOut := env.mustRunApp(repo, nil, "stats", "--help")
+	for _, want := range []string{"--theme", "auto", "dark", "light"} {
+		if !strings.Contains(helpOut, want) {
+			t.Fatalf("stats --help missing %q:\n%s", want, helpOut)
+		}
+	}
+}
+
+func TestCommitAmendTrailerCleanupClearTrailersAndLookupEnv(t *testing.T) {
+	env := newTestRepo(t)
+	repo := env.repoDir
+
+	// 1) Initial multi-role commit with Signed-off-by (-s)
+	env.writeFile(repo, "amend.go", "package amend\n")
+	env.mustGit(repo, nil, "add", "amend.go")
+	env.mustRunApp(repo, nil,
+		"commit",
+		"--plan", "openai/o3",
+		"--impl", "anthropic/claude-sonnet-4",
+		"--rev", "google/gemini-2.5-pro",
+		"--harness", "claude-code@1.0.0",
+		"-s",
+		"-m", "feat: initial multi-role commit",
+	)
+
+	// 2) Amend with only --impl openai/gpt-5: stale managed AI trailers stripped, Signed-off-by kept, Author updated cleanly
+	env.mustRunApp(repo, nil,
+		"commit",
+		"--amend",
+		"--no-edit",
+		"--impl", "openai/gpt-5",
+	)
+
+	amendedAuthor := strings.TrimSpace(env.mustGit(repo, nil, "log", "-1", "--format=%an"))
+	if amendedAuthor != "Alice Lovelace by gpt-5" {
+		t.Fatalf("amended author = %q, want %q", amendedAuthor, "Alice Lovelace by gpt-5")
+	}
+	amendedBody := env.mustGit(repo, nil, "log", "-1", "--format=%B")
+	for _, want := range []string{
+		"Assisted-by: gpt-5",
+		"X-Agent-Implementer: openai/gpt-5",
+		"Signed-off-by: Alice Lovelace <alice@example.com>",
+	} {
+		if !strings.Contains(amendedBody, want) {
+			t.Fatalf("amended commit body missing %q:\n%s", want, amendedBody)
+		}
+	}
+	for _, stale := range []string{
+		"X-Agent-Planner:",
+		"X-Agent-Reviewer:",
+		"X-Agent-Harness:",
+		"claude-sonnet-4",
+		"openai/o3",
+		"gemini-2.5-pro",
+		"claude-code@1.0.0",
+	} {
+		if strings.Contains(amendedBody, stale) {
+			t.Fatalf("amended commit body still contains stale trailer/model %q:\n%s", stale, amendedBody)
+		}
+	}
+
+	// 3) Amend with --clear-trailers: all 7 managed AI trailers removed, Signed-off-by preserved, pure human Author restored
+	env.mustRunApp(repo, nil,
+		"commit",
+		"--amend",
+		"--no-edit",
+		"--clear-trailers",
+	)
+
+	clearedAuthor := strings.TrimSpace(env.mustGit(repo, nil, "log", "-1", "--format=%an"))
+	if clearedAuthor != "Alice Lovelace" {
+		t.Fatalf("cleared author = %q, want %q", clearedAuthor, "Alice Lovelace")
+	}
+	clearedBody := env.mustGit(repo, nil, "log", "-1", "--format=%B")
+	if !strings.Contains(clearedBody, "Signed-off-by: Alice Lovelace <alice@example.com>") {
+		t.Fatalf("cleared commit lost Signed-off-by:\n%s", clearedBody)
+	}
+	for _, managed := range []string{
+		"Assisted-by:",
+		"X-Agent-Orchestrator:",
+		"X-Agent-Planner:",
+		"X-Agent-Implementer:",
+		"X-Agent-Reviewer:",
+		"X-Agent-Committer:",
+		"X-Agent-Harness:",
+	} {
+		if strings.Contains(clearedBody, managed) {
+			t.Fatalf("cleared commit still contains managed trailer %q:\n%s", managed, clearedBody)
+		}
+	}
+
+	// 4) --clear-trailers combined with provenance flags must fail with exit code 1, and help lists --clear-trailers
+	if code, _, errOut := env.runApp(repo, nil, "commit", "--clear-trailers", "--impl", "openai/gpt-5", "-m", "should fail"); code != 1 {
+		t.Fatalf("expected exit 1 combining --clear-trailers and --impl, got %d (stderr: %s)", code, errOut)
+	}
+	helpCommit := env.mustRunApp(repo, nil, "commit", "--help")
+	if !strings.Contains(helpCommit, "--clear-trailers") {
+		t.Fatalf("commit --help missing --clear-trailers:\n%s", helpCommit)
+	}
+
+	// 5) Unset repo user.name and inject GIT_AUTHOR_NAME via App.lookupEnv ONLY (not process os.Setenv)
+	env.mustGit(repo, nil, "config", "--unset", "user.name")
+	_ = env.applyProcessEnv(map[string]string{
+		"NO_COLOR":            "1",
+		"GIT_COMMITTER_NAME":  "Alice Lovelace",
+		"GIT_COMMITTER_EMAIL": "alice@example.com",
+	})
+
+	runWithInjectedEnv := func(overrides map[string]string, args ...string) (int, string, string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		app := &App{
+			stdin:  strings.NewReader(""),
+			stdout: &stdout,
+			stderr: &stderr,
+			lookupEnv: func(key string) (string, bool) {
+				if val, ok := overrides[key]; ok {
+					return val, true
+				}
+				return os.LookupEnv(key)
+			},
+			workDir: repo,
+		}
+		code := app.Run(args)
+		return code, stdout.String(), stderr.String()
+	}
+
+	statusCode, statusOut, statusErr := runWithInjectedEnv(map[string]string{
+		"GIT_AUTHOR_NAME":    "Alice Lovelace by stale-model",
+		"GIT_BY_IMPLEMENTER": "openai/gpt-5",
+	}, "status")
+	if statusCode != 0 {
+		t.Fatalf("status with injected lookupEnv exited %d (stderr: %s)", statusCode, statusErr)
+	}
+	if !strings.Contains(statusOut, "Alice Lovelace by gpt-5 <alice@example.com>") {
+		t.Fatalf("status did not deduplicate injected GIT_AUTHOR_NAME:\n%s", statusOut)
+	}
+	if strings.Contains(statusOut, "stale-model") {
+		t.Fatalf("status leaked stale-model suffix:\n%s", statusOut)
+	}
+
+	env.writeFile(repo, "lookup.go", "package amend\n\nconst L = 1\n")
+	env.mustGit(repo, nil, "add", "lookup.go")
+	// Re-apply clean process env (without GIT_AUTHOR_NAME) after mustGit.
+	_ = env.applyProcessEnv(map[string]string{
+		"NO_COLOR":            "1",
+		"GIT_COMMITTER_NAME":  "Alice Lovelace",
+		"GIT_COMMITTER_EMAIL": "alice@example.com",
+	})
+
+	commitCode, commitOut, commitErr := runWithInjectedEnv(map[string]string{
+		"GIT_AUTHOR_NAME": "Alice Lovelace by stale-model",
+	}, "commit", "--impl", "openai/gpt-5", "-m", "feat: lookupEnv dedupe")
+	if commitCode != 0 {
+		t.Fatalf("commit with injected lookupEnv exited %d\nstdout:\n%s\nstderr:\n%s", commitCode, commitOut, commitErr)
+	}
+	lookupAuthor := strings.TrimSpace(env.mustGit(repo, nil, "log", "-1", "--format=%an"))
+	if lookupAuthor != "Alice Lovelace by gpt-5" {
+		t.Fatalf("lookupEnv commit author = %q, want %q", lookupAuthor, "Alice Lovelace by gpt-5")
+	}
+}

@@ -172,6 +172,7 @@ func (a *App) cmdStatus(args []string) int {
 		fmt.Fprintf(a.stderr, "git-by status: %v\n", err)
 		return 1
 	}
+	repo.LookupEnv = a.lookupEnv
 
 	sessionPath, err := repo.SessionPath()
 	if err != nil {
@@ -454,6 +455,7 @@ func (a *App) cmdStats(args []string) int {
 		since     string
 		jsonOut   bool
 		badgePath string
+		theme     = stats.ThemeAuto
 		topN      = 5
 		noColor   bool
 	)
@@ -494,6 +496,35 @@ func (a *App) cmdStats(args []string) int {
 				fmt.Fprintln(a.stderr, "git-by stats: --badge requires a non-empty output path")
 				return 1
 			}
+		case tok == "--theme":
+			if i+1 >= len(args) {
+				fmt.Fprintln(a.stderr, "git-by stats: --theme requires a value (auto, dark, or light)")
+				return 1
+			}
+			i++
+			raw := strings.TrimSpace(args[i])
+			if raw == "" {
+				fmt.Fprintln(a.stderr, "git-by stats: --theme requires a non-empty value (auto, dark, or light)")
+				return 1
+			}
+			parsed, err := stats.ParseBadgeTheme(raw)
+			if err != nil {
+				fmt.Fprintf(a.stderr, "git-by stats: %v\n", err)
+				return 1
+			}
+			theme = parsed
+		case strings.HasPrefix(tok, "--theme="):
+			raw := strings.TrimSpace(strings.TrimPrefix(tok, "--theme="))
+			if raw == "" {
+				fmt.Fprintln(a.stderr, "git-by stats: --theme requires a non-empty value (auto, dark, or light)")
+				return 1
+			}
+			parsed, err := stats.ParseBadgeTheme(raw)
+			if err != nil {
+				fmt.Fprintf(a.stderr, "git-by stats: %v\n", err)
+				return 1
+			}
+			theme = parsed
 		case tok == "--top":
 			if i+1 >= len(args) {
 				fmt.Fprintln(a.stderr, "git-by stats: --top requires an integer value")
@@ -546,7 +577,7 @@ func (a *App) cmdStats(args []string) int {
 				return 1
 			}
 		}
-		if err := stats.WriteBadgeSVG(resolvedBadge, report); err != nil {
+		if err := stats.WriteBadgeSVGWithTheme(resolvedBadge, report, theme); err != nil {
 			fmt.Fprintf(a.stderr, "git-by stats: failed to write SVG badge: %v\n", err)
 			return 1
 		}

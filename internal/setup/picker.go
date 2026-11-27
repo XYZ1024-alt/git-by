@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -52,6 +53,7 @@ type PickerConfig struct {
 	DryRun     bool
 	Color      bool
 	MaxVisible int // optional viewport row cap for items (0 auto-fits terminal height)
+	MaxWidth   int // optional terminal column cap (0 auto-detects via termWidth; <=0 means unconstrained)
 	RawMode    func() (restore func(), err error)
 }
 
@@ -295,7 +297,7 @@ func needsMoreEscapeBytes(b []byte) bool {
 
 // RenderPickerLines renders the lines of a single multi-select picker frame.
 func RenderPickerLines(scope Scope, uninstall, dryRun, color bool, items []PickerItem, cursor int) []string {
-	return RenderPickerLinesWindowed(scope, uninstall, dryRun, color, items, cursor, 0)
+	return RenderPickerLinesConstrained(scope, uninstall, dryRun, color, items, cursor, 0, 0)
 }
 
 func visibleWindow(total, cursor, maxVisible int) (start, end int) {
@@ -312,15 +314,124 @@ func visibleWindow(total, cursor, maxVisible int) (start, end int) {
 	return start, start + maxVisible
 }
 
-// RenderPickerLinesWindowed renders a picker frame, optionally windowing the item list to
-// maxVisible rows (when maxVisible > 0 and maxVisible < len(items)) so small terminal panes
-// never scroll past the top of the viewport.
-func RenderPickerLinesWindowed(scope Scope, uninstall, dryRun, color bool, items []PickerItem, cursor, maxVisible int) []string {
-	if scope == "" {
-		scope = ScopeGlobal
+func runeDisplayWidth(r rune) int {
+	if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+		return 0
+	}
+	if unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) {
+		return 0
+	}
+	if isWideRune(r) {
+		return 2
+	}
+	return 1
+}
+
+func isWideRune(r rune) bool {
+	return (r >= 0x1100 && r <= 0x115F) ||
+		(r >= 0x2E80 && r <= 0xA4CF && r != 0x303F) ||
+		(r >= 0xAC00 && r <= 0xD7A3) ||
+		(r >= 0xF900 && r <= 0xFAFF) ||
+		(r >= 0xFE10 && r <= 0xFE6F) ||
+		(r >= 0xFF00 && r <= 0xFF60) ||
+		(r >= 0xFFE0 && r <= 0xFFE6) ||
+		(r >= 0x20000 && r <= 0x3FFFD)
+}
+
+func stringDisplayWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		w += runeDisplayWidth(r)
+	}
+	return w
+}
+
+func truncateDisplayEnd(s string, maxCols int) string {
+	if maxCols <= 0 {
+		return ""
+	}
+	if stringDisplayWidth(s) <= maxCols {
+		return s
+	}
+	if maxCols == 1 {
+		return "…"
 	}
 
-	header := fmt.Sprintf("git-by setup (%s)", scope)
+	limit := maxCols - 1
+	var b strings.Builder
+	b.Grow(len(s))
+	used := 0
+	for _, r := range s {
+		rw := runeDisplayWidth(r)
+		if used+rw > limit {
+			break
+		}
+		b.WriteRune(r)
+		used += rw
+	}
+	b.WriteRune('…')
+	return b.String()
+}
+
+func truncatePathDisplayHead(s string, maxCols int) string {
+	if maxCols <= 0 {
+		return ""
+	}
+	if stringDisplayWidth(s) <= maxCols {
+		return s
+	}
+	if maxCols == 1 {
+		return "…"
+	}
+
+	limit := maxCols - 1
+	runes := []rune(s)
+	used := 0
+	start := len(runes)
+	for i := len(runes) - 1; i >= 0; i-- {
+		rw := runeDisplayWidth(runes[i])
+		if used+rw > limit {
+			break
+		}
+		used += rw
+		start = i
+	}
+	// Avoid leaving an orphaned combining mark or zero-width rune directly after "…".
+	for start < len(runes) && runeDisplayWidth(runes[start]) == 0 {
+		start++
+	}
+
+	tail := string(runes[start:])
+	if !strings.HasPrefix(tail, "/") {
+		if idx := strings.IndexByte(tail, '/'); idx >= 0 {
+			aligned := tail[idx:]
+			if stringDisplayWidth(aligned) >= max(6, maxCols/2) {
+				tail = aligned
+			}
+		}
+	}
+	return "…" + tail
+}
+
+func renderPickerHeader(scope Scope, uninstall, dryRun, color, constrained bool, availCols int) string {
+	plainBase := fmt.Sprintf("git-by setup (%s)", scope)
+	plainHeader := plainBase
+	if uninstall {
+		plainHeader += " [uninstall]"
+	}
+	if dryRun {
+		plainHeader += " [dry-run]"
+	}
+
+	if constrained && stringDisplayWidth(plainHeader) > availCols {
+		truncated := truncateDisplayEnd(plainHeader, availCols)
+		if color {
+			return wrapANSI(ansiBold, truncated)
+		}
+		return truncated
+	}
+
+	header := plainBase
 	if color {
 		header = wrapANSI(ansiBold, header)
 	}
@@ -338,28 +449,167 @@ func RenderPickerLinesWindowed(scope Scope, uninstall, dryRun, color bool, items
 		}
 		header += " " + tag
 	}
+	return header
+}
 
+func renderPickerHint(uninstall, color, constrained bool, availCols int) string {
 	confirmVerb := "install"
 	if uninstall {
 		confirmVerb = "uninstall"
 	}
-	hint := fmt.Sprintf("  ↑/↓ move · Space select · a toggle all · Enter %s · q/Esc cancel", confirmVerb)
+	candidates := []string{
+		fmt.Sprintf("  ↑/↓ move · Space select · a toggle all · Enter %s · q/Esc cancel", confirmVerb),
+		fmt.Sprintf("  ↑/↓ · Space · a all · Enter %s · q/Esc", confirmVerb),
+		"  ↑/↓ · Space · Enter · q/Esc",
+	}
+
+	hint := candidates[0]
+	if constrained {
+		matched := false
+		for _, cand := range candidates {
+			if stringDisplayWidth(cand) <= availCols {
+				hint = cand
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			hint = truncateDisplayEnd(candidates[len(candidates)-1], availCols)
+		}
+	}
 	if color {
 		hint = wrapANSI(ansiDim, hint)
 	}
+	return hint
+}
 
-	labelWidth := 0
-	pathWidth := 0
+func renderPickerFooter(selectedCount, total, start, end int, color, constrained bool, availCols int) string {
+	windowed := end-start < total
+	footer := fmt.Sprintf("  %d of %d selected", selectedCount, total)
+	if windowed {
+		footer += fmt.Sprintf("  (showing %d-%d of %d)", start+1, end, total)
+	}
+	if constrained && stringDisplayWidth(footer) > availCols {
+		if windowed {
+			compact := fmt.Sprintf("  %d/%d sel (%d-%d/%d)", selectedCount, total, start+1, end, total)
+			if stringDisplayWidth(compact) <= availCols {
+				footer = compact
+			} else {
+				footer = truncateDisplayEnd(compact, availCols)
+			}
+		} else {
+			footer = truncateDisplayEnd(footer, availCols)
+		}
+	}
+	if color {
+		footer = wrapANSI(ansiDim, footer)
+	}
+	return footer
+}
+
+func stylePickerLabel(label string, focused, selected, color bool) string {
+	if !color {
+		return label
+	}
+	switch {
+	case focused:
+		return wrapANSI(ansiBold+ansiCyan, label)
+	case !selected:
+		return wrapANSI(ansiDim, label)
+	default:
+		return label
+	}
+}
+
+func stylePickerStatus(status string, color bool) string {
+	if !color {
+		return status
+	}
+	switch status {
+	case "configured":
+		return wrapANSI(ansiCyan, status)
+	case "detected":
+		return wrapANSI(ansiGreen, status)
+	case "default":
+		return wrapANSI(ansiCyan, status)
+	default:
+		return wrapANSI(ansiDim, status)
+	}
+}
+
+// RenderPickerLinesWindowed renders a picker frame, optionally windowing the item list to
+// maxVisible rows (when maxVisible > 0 and maxVisible < len(items)) so small terminal panes
+// never scroll past the top of the viewport.
+func RenderPickerLinesWindowed(scope Scope, uninstall, dryRun, color bool, items []PickerItem, cursor, maxVisible int) []string {
+	return RenderPickerLinesConstrained(scope, uninstall, dryRun, color, items, cursor, maxVisible, 0)
+}
+
+// RenderPickerLinesConstrained renders a picker frame constrained to maxVisible item rows
+// (when maxVisible > 0) and maxWidth terminal columns (when maxWidth > 0, capping visible
+// display width at max(0, maxWidth-1) columns so narrow terminal panes never auto-wrap).
+func RenderPickerLinesConstrained(scope Scope, uninstall, dryRun, color bool, items []PickerItem, cursor, maxVisible, maxWidth int) []string {
+	if scope == "" {
+		scope = ScopeGlobal
+	}
+
+	constrained := maxWidth > 0
+	availCols := 0
+	if constrained {
+		availCols = max(0, maxWidth-1)
+	}
+
+	header := renderPickerHeader(scope, uninstall, dryRun, color, constrained, availCols)
+	hint := renderPickerHint(uninstall, color, constrained, availCols)
+
+	naturalLabelW := 0
+	naturalPathW := 0
+	naturalStatusW := 0
 	selectedCount := 0
 	for _, it := range items {
 		if it.Selected {
 			selectedCount++
 		}
-		if n := utf8.RuneCountInString(it.Label); n > labelWidth {
-			labelWidth = n
+		if w := stringDisplayWidth(it.Label); w > naturalLabelW {
+			naturalLabelW = w
 		}
-		if n := utf8.RuneCountInString(it.DisplayPath); n > pathWidth {
-			pathWidth = n
+		if w := stringDisplayWidth(it.DisplayPath); w > naturalPathW {
+			naturalPathW = w
+		}
+		if w := stringDisplayWidth(it.Status); w > naturalStatusW {
+			naturalStatusW = w
+		}
+	}
+
+	const (
+		itemPrefixWidth = 8 // "  " + pointer(1) + " " + box(3) + " "
+		minPathWidth    = 10
+		minLabelWidth   = 8
+	)
+
+	type rowTier int
+	const (
+		tierFull rowTier = iota
+		tierCompressPath
+		tierHidePath
+		tierUltraNarrow
+	)
+
+	tier := tierFull
+	labelW := naturalLabelW
+	pathW := naturalPathW
+	if constrained {
+		fullWidth := itemPrefixWidth + naturalLabelW + 2 + naturalPathW + 2 + naturalStatusW
+		if fullWidth <= availCols {
+			tier = tierFull
+		} else if remPath := availCols - (itemPrefixWidth + naturalLabelW + 2 + 2 + naturalStatusW); remPath >= minPathWidth {
+			tier = tierCompressPath
+			labelW = naturalLabelW
+			pathW = min(naturalPathW, remPath)
+		} else if remLabel := availCols - (itemPrefixWidth + 2 + naturalStatusW); remLabel >= minLabelWidth {
+			tier = tierHidePath
+			labelW = min(naturalLabelW, remLabel)
+		} else {
+			tier = tierUltraNarrow
 		}
 	}
 
@@ -371,17 +621,39 @@ func RenderPickerLinesWindowed(scope Scope, uninstall, dryRun, color bool, items
 		it := items[i]
 		focused := i == cursor
 
-		pointer := " "
+		plainPointer := " "
 		if focused {
-			pointer = ">"
-			if color {
-				pointer = wrapANSI(ansiBold+ansiCyan, pointer)
-			}
+			plainPointer = ">"
+		}
+		plainBox := "[ ]"
+		if it.Selected {
+			plainBox = "[x]"
 		}
 
-		box := "[ ]"
+		if tier == tierUltraNarrow && availCols < itemPrefixWidth+1 {
+			plainRow := fmt.Sprintf("%s %s %s", plainPointer, plainBox, it.Label)
+			row := truncateDisplayEnd(plainRow, availCols)
+			if color {
+				switch {
+				case focused:
+					row = wrapANSI(ansiBold+ansiCyan, row)
+				case it.Selected:
+					row = wrapANSI(ansiGreen, row)
+				default:
+					row = wrapANSI(ansiDim, row)
+				}
+			}
+			lines = append(lines, row)
+			continue
+		}
+
+		pointer := plainPointer
+		if focused && color {
+			pointer = wrapANSI(ansiBold+ansiCyan, pointer)
+		}
+
+		box := plainBox
 		if it.Selected {
-			box = "[x]"
 			if color {
 				box = wrapANSI(ansiBold+ansiGreen, box)
 			}
@@ -389,53 +661,61 @@ func RenderPickerLinesWindowed(scope Scope, uninstall, dryRun, color bool, items
 			box = wrapANSI(ansiDim, box)
 		}
 
-		labelPad := strings.Repeat(" ", max(0, labelWidth-utf8.RuneCountInString(it.Label)))
-		pathPad := strings.Repeat(" ", max(0, pathWidth-utf8.RuneCountInString(it.DisplayPath)))
-
-		renderedLabel := it.Label
-		renderedPath := it.DisplayPath
-		renderedStatus := it.Status
-
-		if color {
-			switch {
-			case focused:
-				renderedLabel = wrapANSI(ansiBold+ansiCyan, it.Label)
-			case !it.Selected:
-				renderedLabel = wrapANSI(ansiDim, it.Label)
+		var row string
+		switch tier {
+		case tierFull, tierCompressPath:
+			plainLabel := it.Label
+			plainPath := it.DisplayPath
+			if tier == tierCompressPath {
+				plainPath = truncatePathDisplayHead(it.DisplayPath, pathW)
 			}
-			renderedPath = wrapANSI(ansiDim, it.DisplayPath)
 
-			switch it.Status {
-			case "configured":
-				renderedStatus = wrapANSI(ansiCyan, it.Status)
-			case "detected":
-				renderedStatus = wrapANSI(ansiGreen, it.Status)
-			case "default":
-				renderedStatus = wrapANSI(ansiCyan, it.Status)
-			default:
-				renderedStatus = wrapANSI(ansiDim, it.Status)
+			labelPad := strings.Repeat(" ", max(0, labelW-stringDisplayWidth(plainLabel)))
+			pathPad := strings.Repeat(" ", max(0, pathW-stringDisplayWidth(plainPath)))
+
+			renderedLabel := stylePickerLabel(plainLabel, focused, it.Selected, color)
+			renderedPath := plainPath
+			if color {
+				renderedPath = wrapANSI(ansiDim, plainPath)
 			}
+			renderedStatus := stylePickerStatus(it.Status, color)
+
+			row = fmt.Sprintf("  %s %s %s%s  %s%s  %s",
+				pointer,
+				box,
+				renderedLabel,
+				labelPad,
+				renderedPath,
+				pathPad,
+				renderedStatus,
+			)
+
+		case tierHidePath:
+			plainLabel := truncateDisplayEnd(it.Label, labelW)
+			labelPad := strings.Repeat(" ", max(0, labelW-stringDisplayWidth(plainLabel)))
+
+			renderedLabel := stylePickerLabel(plainLabel, focused, it.Selected, color)
+			renderedStatus := stylePickerStatus(it.Status, color)
+
+			row = fmt.Sprintf("  %s %s %s%s  %s",
+				pointer,
+				box,
+				renderedLabel,
+				labelPad,
+				renderedStatus,
+			)
+
+		case tierUltraNarrow:
+			narrowLabelW := availCols - itemPrefixWidth
+			plainLabel := truncateDisplayEnd(it.Label, narrowLabelW)
+			renderedLabel := stylePickerLabel(plainLabel, focused, it.Selected, color)
+			row = fmt.Sprintf("  %s %s %s", pointer, box, renderedLabel)
 		}
 
-		row := fmt.Sprintf("  %s %s %s%s  %s%s  %s",
-			pointer,
-			box,
-			renderedLabel,
-			labelPad,
-			renderedPath,
-			pathPad,
-			renderedStatus,
-		)
 		lines = append(lines, row)
 	}
 
-	footer := fmt.Sprintf("  %d of %d selected", selectedCount, len(items))
-	if end-start < len(items) {
-		footer += fmt.Sprintf("  (showing %d-%d of %d)", start+1, end, len(items))
-	}
-	if color {
-		footer = wrapANSI(ansiDim, footer)
-	}
+	footer := renderPickerFooter(selectedCount, len(items), start, end, color, constrained, availCols)
 	lines = append(lines, "", footer)
 	return lines
 }
@@ -493,7 +773,11 @@ func RunPicker(cfg PickerConfig, initialItems []PickerItem) ([]string, error) {
 				maxVis = max(3, h-6)
 			}
 		}
-		lines := RenderPickerLinesWindowed(cfg.Scope, cfg.Uninstall, cfg.DryRun, cfg.Color, items, cursor, maxVis)
+		maxW := cfg.MaxWidth
+		if maxW <= 0 {
+			maxW = termWidth(cfg.Out)
+		}
+		lines := RenderPickerLinesConstrained(cfg.Scope, cfg.Uninstall, cfg.DryRun, cfg.Color, items, cursor, maxVis, maxW)
 		var buf bytes.Buffer
 		if renderedLines == 0 {
 			buf.WriteString("\x1b[?25l")

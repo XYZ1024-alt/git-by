@@ -3,10 +3,12 @@ package setup
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -458,5 +460,274 @@ func TestPickerViewportWindowing(t *testing.T) {
 	}
 	if !reflect.DeepEqual(selected, []string{"hermes"}) {
 		t.Fatalf("selected = %v, want [hermes]", selected)
+	}
+}
+
+var (
+	ansiSGRRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	ansiCSIRe = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
+)
+
+func assertValidBalancedSGR(t *testing.T, line string) {
+	t.Helper()
+	active := false
+	for i := 0; i < len(line); i++ {
+		if line[i] != 0x1b {
+			continue
+		}
+		loc := ansiSGRRe.FindStringIndex(line[i:])
+		if loc == nil || loc[0] != 0 {
+			t.Fatalf("truncated or invalid ANSI escape sequence at byte %d in %q", i, line)
+		}
+		seq := line[i : i+loc[1]]
+		if seq == ansiReset {
+			if !active {
+				t.Fatalf("stray ANSI reset %q without active style in %q", seq, line)
+			}
+			active = false
+		} else {
+			active = true
+		}
+		i += loc[1] - 1
+	}
+	if active {
+		t.Fatalf("unclosed ANSI SGR sequence in %q", line)
+	}
+}
+
+func TestRenderPickerLinesConstrained_NoOverflowAcrossWidths(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	mustMkdirAll(t, filepath.Join(home, ".gemini"))
+	mustWriteFile(t, filepath.Join(home, ".claude", "rules", "git-by.md"), []byte(RenderManagedBlock("claude-code")+"\n"), 0o644)
+
+	globalItems, err := DiscoverPickerItems(Options{Scope: ScopeGlobal, HomeDir: home})
+	if err != nil {
+		t.Fatalf("DiscoverPickerItems: %v", err)
+	}
+	if len(globalItems) != 30 {
+		t.Fatalf("expected 30 global items, got %d", len(globalItems))
+	}
+
+	cjkAndCombiningItems := []PickerItem{
+		{
+			ID:          "zh-agent",
+			Label:       "中文编程助手 (zh-agent)",
+			DisplayPath: "~/项目工作区/深层配置目录/规则/git-by.md",
+			Status:      "configured",
+			Selected:    true,
+		},
+		{
+			ID:          "combining",
+			Label:       "Cafe\u0301 Agent (cafe\u0301)",
+			DisplayPath: "~/work/re\u0301pertoire/sous-re\u0301pertoire/git-by.md",
+			Status:      "detected",
+			Selected:    false,
+		},
+		{
+			ID:          "jp-agent",
+			Label:       "日本語エージェント (jp)",
+			DisplayPath: "~/設定/ディレクトリ/全角ファイル名テスト/AGENTS.md",
+			Status:      "not detected",
+			Selected:    true,
+		},
+	}
+
+	datasets := []struct {
+		name       string
+		items      []PickerItem
+		maxVisible int
+		uninstall  bool
+		dryRun     bool
+	}{
+		{name: "global_30_windowed", items: globalItems, maxVisible: 8, uninstall: false, dryRun: false},
+		{name: "global_30_flags", items: globalItems, maxVisible: 6, uninstall: true, dryRun: true},
+		{name: "cjk_and_combining", items: cjkAndCombiningItems, maxVisible: 0, uninstall: false, dryRun: false},
+	}
+
+	widths := []int{1, 2, 5, 10, 20, 30, 40, 55, 70, 80, 120}
+
+	for _, ds := range datasets {
+		for _, color := range []bool{false, true} {
+			for _, maxW := range widths {
+				t.Run(fmt.Sprintf("%s/color=%v/w=%d", ds.name, color, maxW), func(t *testing.T) {
+					lines := RenderPickerLinesConstrained(
+						ScopeGlobal,
+						ds.uninstall,
+						ds.dryRun,
+						color,
+						ds.items,
+						1,
+						ds.maxVisible,
+						maxW,
+					)
+
+					wantVisible := len(ds.items)
+					if ds.maxVisible > 0 && ds.maxVisible < wantVisible {
+						wantVisible = ds.maxVisible
+					}
+					wantLen := wantVisible + 5
+					if len(lines) != wantLen {
+						t.Fatalf("line count = %d, want %d", len(lines), wantLen)
+					}
+
+					budget := max(0, maxW-1)
+					for idx, line := range lines {
+						if color {
+							assertValidBalancedSGR(t, line)
+						} else if strings.ContainsRune(line, 0x1b) {
+							t.Fatalf("unexpected ANSI escape in color=false line %d: %q", idx, line)
+						}
+
+						plain := ansiSGRRe.ReplaceAllString(line, "")
+						gotW := stringDisplayWidth(plain)
+						if gotW > budget {
+							t.Fatalf("line %d overflowed budget %d (got %d): %q", idx, budget, gotW, plain)
+						}
+					}
+				})
+			}
+		}
+	}
+
+	// Verify combining marks are never orphaned immediately after "…" when head-truncating paths.
+	truncComb := truncatePathDisplayHead("x/a\u0301bc/d", 5)
+	if stringDisplayWidth(truncComb) > 5 {
+		t.Fatalf("truncatePathDisplayHead overflowed: %q (width %d)", truncComb, stringDisplayWidth(truncComb))
+	}
+	if strings.HasPrefix(truncComb, "…\u0301") {
+		t.Fatalf("truncatePathDisplayHead left orphaned combining mark after ellipsis: %q", truncComb)
+	}
+	truncComb2 := truncatePathDisplayHead("xa\u0301bc", 3)
+	if truncComb2 != "…bc" {
+		t.Fatalf("truncatePathDisplayHead(%q, 3) = %q, want %q", "xa\u0301bc", truncComb2, "…bc")
+	}
+}
+
+func TestRenderPickerLinesConstrained_TierTransitions(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	mustMkdirAll(t, filepath.Join(home, ".gemini"))
+	mustWriteFile(t, filepath.Join(home, ".claude", "rules", "git-by.md"), []byte(RenderManagedBlock("claude-code")+"\n"), 0o644)
+
+	items, err := DiscoverPickerItems(Options{Scope: ScopeGlobal, HomeDir: home})
+	if err != nil {
+		t.Fatalf("DiscoverPickerItems: %v", err)
+	}
+
+	// 1. maxWidth=0 must be byte-for-byte identical to RenderPickerLinesWindowed (both plain and colored).
+	for _, color := range []bool{false, true} {
+		want := RenderPickerLinesWindowed(ScopeGlobal, false, false, color, items, 0, 6)
+		got := RenderPickerLinesConstrained(ScopeGlobal, false, false, color, items, 0, 6, 0)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("color=%v: RenderPickerLinesConstrained(..., 0) diverged from RenderPickerLinesWindowed", color)
+		}
+	}
+
+	// Wide (maxWidth=120): Tier 1 - full Label, DisplayPath, Status.
+	wide := RenderPickerLinesConstrained(ScopeGlobal, false, false, false, items, 0, 6, 120)
+	wideRow0 := wide[3]
+	if !strings.Contains(wideRow0, "Antigravity (agy)") ||
+		!strings.Contains(wideRow0, "~/.gemini/config/rules/git-by.md") ||
+		!strings.Contains(wideRow0, "detected") {
+		t.Fatalf("wide tier row0 missing full columns: %q", wideRow0)
+	}
+
+	// Medium split (maxWidth=72): Tier 2 - full Label & Status, head-truncated DisplayPath with "…/".
+	medium := RenderPickerLinesConstrained(ScopeGlobal, false, false, false, items, 0, 6, 72)
+	medRow0 := medium[3]
+	if !strings.Contains(medRow0, "Antigravity (agy)") || !strings.Contains(medRow0, "detected") {
+		t.Fatalf("medium tier row0 should preserve full Label and Status: %q", medRow0)
+	}
+	if !strings.Contains(medRow0, "…/") {
+		t.Fatalf("medium tier row0 should head-truncate path with \"…/\": %q", medRow0)
+	}
+	if strings.Contains(medRow0, "~/.gemini/config/rules/git-by.md") {
+		t.Fatalf("medium tier row0 should compress long path: %q", medRow0)
+	}
+
+	// Narrow split (maxWidth=48): Tier 3 - DisplayPath hidden, Label & Status fully visible.
+	narrow := RenderPickerLinesConstrained(ScopeGlobal, false, false, false, items, 0, 6, 48)
+	narrowRow0 := narrow[3]
+	if !strings.Contains(narrowRow0, "Antigravity (agy)") || !strings.Contains(narrowRow0, "detected") {
+		t.Fatalf("narrow tier row0 should keep full Label and Status: %q", narrowRow0)
+	}
+	if strings.Contains(narrowRow0, "git-by.md") || strings.Contains(narrowRow0, "…/") {
+		t.Fatalf("narrow tier row0 should hide DisplayPath: %q", narrowRow0)
+	}
+
+	// Ultra-narrow split (maxWidth=22): Tier 4 - keep "> [x]" and truncated Label only.
+	ultra := RenderPickerLinesConstrained(ScopeGlobal, false, false, false, items, 0, 6, 22)
+	ultraRow0 := ultra[3]
+	if !strings.HasPrefix(ultraRow0, "  > [x] ") {
+		t.Fatalf("ultra-narrow row0 should keep \"  > [x] \" prefix: %q", ultraRow0)
+	}
+	if !strings.Contains(ultraRow0, "Antigravity") || !strings.HasSuffix(ultraRow0, "…") {
+		t.Fatalf("ultra-narrow row0 should show truncated Label: %q", ultraRow0)
+	}
+	if strings.Contains(ultraRow0, "detected") || strings.Contains(ultraRow0, "git-by.md") {
+		t.Fatalf("ultra-narrow row0 should hide path and status: %q", ultraRow0)
+	}
+}
+
+func TestRunPicker_MaxWidthAndNonTerminalTermWidth(t *testing.T) {
+	t.Parallel()
+
+	// Verify termWidth returns 0 for non-terminals (*bytes.Buffer, nil, regular file).
+	if w := termWidth(&bytes.Buffer{}); w != 0 {
+		t.Fatalf("termWidth(&bytes.Buffer{}) = %d, want 0", w)
+	}
+	if w := termWidth(nil); w != 0 {
+		t.Fatalf("termWidth(nil) = %d, want 0", w)
+	}
+	var nilFile *os.File
+	if w := termWidth(nilFile); w != 0 {
+		t.Fatalf("termWidth((*os.File)(nil)) = %d, want 0", w)
+	}
+	tmpFile, err := os.CreateTemp(t.TempDir(), "term-width-regular-*")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	defer tmpFile.Close()
+	if w := termWidth(tmpFile); w != 0 {
+		t.Fatalf("termWidth(regular file) = %d, want 0", w)
+	}
+
+	// Interactive RunPicker with MaxWidth: 50, MaxVisible: 5, Color: true.
+	home := t.TempDir()
+	mustMkdirAll(t, filepath.Join(home, ".gemini"))
+	items, err := DiscoverPickerItems(Options{Scope: ScopeGlobal, HomeDir: home})
+	if err != nil {
+		t.Fatalf("DiscoverPickerItems: %v", err)
+	}
+	// Initial state: only index 0 ("agy") is selected.
+	// Down -> index 1 ("pi"), Space -> select "pi", Down -> index 2 ("claude"), Space -> select "claude",
+	// Up -> index 1 ("pi"), Up -> index 0 ("agy"), Space -> unselect "agy", Enter -> ["pi", "claude"].
+	input := "\x1b[B \x1b[B \x1b[A\x1b[A \r"
+	var out bytes.Buffer
+	selected, err := RunPicker(PickerConfig{
+		In:         strings.NewReader(input),
+		Out:        &out,
+		Scope:      ScopeGlobal,
+		Color:      true,
+		MaxVisible: 5,
+		MaxWidth:   50,
+	}, items)
+	if err != nil {
+		t.Fatalf("RunPicker error: %v", err)
+	}
+	want := []string{"pi", "claude"}
+	if !reflect.DeepEqual(selected, want) {
+		t.Fatalf("selected = %v, want %v", selected, want)
+	}
+
+	rawLines := strings.Split(out.String(), "\n")
+	for idx, rawLine := range rawLines {
+		plain := strings.ReplaceAll(ansiCSIRe.ReplaceAllString(rawLine, ""), "\r", "")
+		if gotW := stringDisplayWidth(plain); gotW > 49 {
+			t.Fatalf("rendered frame line %d exceeded 49 cols (got %d): %q", idx, gotW, plain)
+		}
 	}
 }

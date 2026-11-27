@@ -100,6 +100,96 @@ func (m Metadata) PrimaryModel() (full string, short string) {
 	return "", ""
 }
 
+// StripAuthorAttribution removes one or more trailing git-by model attribution
+// suffixes (" by <model>" or " by <model> & <N> more") while preserving ordinary
+// human names (e.g. "Shelby Miller") and malformed suffixes untouched.
+func StripAuthorAttribution(authorName string) string {
+	s := strings.TrimSpace(authorName)
+	for {
+		next, ok := stripOneAuthorAttribution(s)
+		if !ok {
+			return s
+		}
+		s = next
+	}
+}
+
+func stripOneAuthorAttribution(s string) (string, bool) {
+	if s == "" {
+		return "", false
+	}
+	if idx := strings.LastIndex(s, " by "); idx > 0 {
+		base := strings.TrimSpace(s[:idx])
+		if base == "" {
+			return s, false
+		}
+		modelPart := strings.TrimSpace(s[idx+4:])
+		candidate := stripMultiModelSuffix(modelPart)
+		if isValidProvenanceModelToken(candidate) {
+			return base, true
+		}
+		return s, false
+	}
+	if strings.HasPrefix(s, "by ") {
+		modelPart := strings.TrimSpace(s[3:])
+		candidate := stripMultiModelSuffix(modelPart)
+		if isValidProvenanceModelToken(candidate) {
+			return "", true
+		}
+	}
+	return s, false
+}
+
+// stripMultiModelSuffix strips a trailing " & <positive-int> more" suffix if present.
+func stripMultiModelSuffix(s string) string {
+	const tail = " more"
+	if !strings.HasSuffix(s, tail) {
+		return s
+	}
+	withoutMore := s[:len(s)-len(tail)]
+	ampIdx := strings.LastIndex(withoutMore, " & ")
+	if ampIdx <= 0 {
+		return s
+	}
+	numStr := withoutMore[ampIdx+3:]
+	if !isPositiveDecimalInt(numStr) {
+		return s
+	}
+	return withoutMore[:ampIdx]
+}
+
+func isPositiveDecimalInt(s string) bool {
+	if s == "" || s[0] == '0' {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isValidProvenanceModelToken(tok string) bool {
+	if tok == "" {
+		return false
+	}
+	for i := 0; i < len(tok); i++ {
+		c := tok[i]
+		isLower := c >= 'a' && c <= 'z'
+		isUpper := c >= 'A' && c <= 'Z'
+		isDigit := c >= '0' && c <= '9'
+		isPunct := c == '-' || c == '_' || c == '.' || c == ':' || c == '+' || c == '/' || c == '@'
+		if i == 0 && !isLower && !isUpper && !isDigit {
+			return false
+		}
+		if !isLower && !isUpper && !isDigit && !isPunct {
+			return false
+		}
+	}
+	return true
+}
+
 // FormatAuthorName formats the Git author display name with primary model attribution.
 // When multiple distinct implementer models are present, it appends " & <M-1> more".
 func (m Metadata) FormatAuthorName(baseUserName string) string {
@@ -111,7 +201,7 @@ func (m Metadata) FormatAuthorName(baseUserName string) string {
 	if impls := cleanUnique(m.Implementers); len(impls) > 1 {
 		attribution = fmt.Sprintf("%s & %d more", short, len(impls)-1)
 	}
-	base := strings.TrimSpace(baseUserName)
+	base := StripAuthorAttribution(baseUserName)
 	if base == "" {
 		return "by " + attribution
 	}

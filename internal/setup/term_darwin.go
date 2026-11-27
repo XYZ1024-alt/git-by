@@ -103,15 +103,25 @@ type winsize struct {
 	Ypixel uint16
 }
 
-func termHeight(out io.Writer) int {
+func termSize(out io.Writer) (rows, cols int) {
 	f, ok := out.(*os.File)
 	if !ok || f == nil {
-		return 0
+		return 0, 0
 	}
 	var ws winsize
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws)))
 	if errno != 0 {
-		return 0
+		return 0, 0
 	}
-	return int(ws.Row)
+	return int(ws.Row), int(ws.Col)
+}
+
+func termHeight(out io.Writer) int {
+	rows, _ := termSize(out)
+	return rows
+}
+
+func termWidth(out io.Writer) int {
+	_, cols := termSize(out)
+	return cols
 }
