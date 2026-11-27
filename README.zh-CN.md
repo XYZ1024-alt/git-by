@@ -37,10 +37,10 @@ CommitDate: Wed Nov 25 21:40:12 2026 +0800
     feat(auth): enforce PKCE S256 challenge verification
 
     Assisted-by: pi:gpt-6-astra [golangci-lint] [go-test]
-    X-Agent-Orchestrator: anthropic/claude-opus-4
-    X-Agent-Planner: openai/o3
-    X-Agent-Implementer: openai/gpt-6-astra, anthropic/claude-sonnet-4
-    X-Agent-Reviewer: google/gemini-3-pro
+    X-Agent-Orchestrator: anthropic/claude-opus-5.5
+    X-Agent-Planner: openai/gpt-6.2-astra
+    X-Agent-Implementer: openai/gpt-6-astra, anthropic/claude-sonnet-5.5
+    X-Agent-Reviewer: google/gemini-4-carbon
     X-Agent-Harness: pi@1.0.0
 ```
 
@@ -117,8 +117,8 @@ git-by setup (global)
 
 ```bash
 # 记录工作流中的模型分工
-git by set plan openai/o3 --harness claude-code@1.0.24
-git by set impl anthropic/claude-sonnet-4 --tool go-test --tool golangci-lint
+git by set plan openai/gpt-6.2-astra --harness claude-code@1.0.24
+git by set impl anthropic/claude-sonnet-5.5 --tool go-test --tool golangci-lint
 
 # 提交前预览生成的 Author、Committer 与 Git Trailers
 git by status
@@ -137,11 +137,11 @@ git by commit -S -m "feat: add worktree-isolated session store"
 每个 `git worktree` 的会话独立原子存储在 `$(git rev-parse --git-path by-session.json)` 中：
 
 ```bash
-git by set orch anthropic/claude-opus-4 --harness pi@1.0.0
-git by set plan openai/o3
+git by set orch anthropic/claude-opus-5.5 --harness pi@1.0.0
+git by set plan openai/gpt-6.2-astra
 git by set impl openai/gpt-6-astra --tool go-test
-git by set impl anthropic/claude-sonnet-4 --tool golangci-lint   # 默认按序去重追加
-git by set rev  google/gemini-3-pro
+git by set impl anthropic/claude-sonnet-5.5 --tool golangci-lint # 默认按序去重追加
+git by set rev  google/gemini-4-carbon
 
 git by status                                                    # 预览溯源面板
 git by commit -m "feat(engine): add zero-amend hook forwarding"  # 提交成功后自动清空会话
@@ -164,16 +164,16 @@ git by commit -m "feat(engine): add zero-amend hook forwarding"  # 提交成功�
 
 ```bash
 # 无状态单行提交
-git by commit --impl anthropic/claude-sonnet-4 --plan openai/o3 --tool vitest -am "feat: PKCE verifier"
+git by commit --impl anthropic/claude-sonnet-5.5 --plan openai/gpt-6.2-astra --tool vitest -am "feat: PKCE verifier"
 
 # 环境变量注入（适合 Agent 容器沙箱与 CI）
-export GIT_BY_IMPLEMENTER="openai/gpt-6-astra,anthropic/claude-sonnet-4"
+export GIT_BY_IMPLEMENTER="openai/gpt-6-astra,anthropic/claude-sonnet-5.5"
 export GIT_BY_HARNESS="agy@2.0"
 export GIT_BY_TOOLS="go-test,golangci-lint"
 git by commit -m "refactor: extract trailer encoder"
 
 # 安全修订提交（保留原作者身份，去重刷新受管 Trailers，不重复叠加 "by <model>"）
-git by commit --impl anthropic/claude-sonnet-4 --amend --no-edit
+git by commit --impl anthropic/claude-sonnet-5.5 --amend --no-edit
 
 # 一键剥离已有提交中的受管 AI Trailers 与作者归属后缀
 git by commit --clear-trailers --amend --no-edit

@@ -37,10 +37,10 @@ CommitDate: Wed Nov 25 21:40:12 2026 +0800
     feat(auth): enforce PKCE S256 challenge verification
 
     Assisted-by: pi:gpt-6-astra [golangci-lint] [go-test]
-    X-Agent-Orchestrator: anthropic/claude-opus-4
-    X-Agent-Planner: openai/o3
-    X-Agent-Implementer: openai/gpt-6-astra, anthropic/claude-sonnet-4
-    X-Agent-Reviewer: google/gemini-3-pro
+    X-Agent-Orchestrator: anthropic/claude-opus-5.5
+    X-Agent-Planner: openai/gpt-6.2-astra
+    X-Agent-Implementer: openai/gpt-6-astra, anthropic/claude-sonnet-5.5
+    X-Agent-Reviewer: google/gemini-4-carbon
     X-Agent-Harness: pi@1.0.0
 ```
 
@@ -117,8 +117,8 @@ Once configured, your agents will automatically record roles and commit via `git
 
 ```bash
 # Stage AI roles during development
-git by set plan openai/o3 --harness claude-code@1.0.24
-git by set impl anthropic/claude-sonnet-4 --tool go-test --tool golangci-lint
+git by set plan openai/gpt-6.2-astra --harness claude-code@1.0.24
+git by set impl anthropic/claude-sonnet-5.5 --tool go-test --tool golangci-lint
 
 # Preview resolved Git Author, Committer, and Trailers
 git by status
@@ -137,11 +137,11 @@ git by commit -S -m "feat: add worktree-isolated session store"
 Each worktree stores its session atomically at `$(git rev-parse --git-path by-session.json)`:
 
 ```bash
-git by set orch anthropic/claude-opus-4 --harness pi@1.0.0
-git by set plan openai/o3
+git by set orch anthropic/claude-opus-5.5 --harness pi@1.0.0
+git by set plan openai/gpt-6.2-astra
 git by set impl openai/gpt-6-astra --tool go-test
-git by set impl anthropic/claude-sonnet-4 --tool golangci-lint   # appends & deduplicates
-git by set rev  google/gemini-3-pro
+git by set impl anthropic/claude-sonnet-5.5 --tool golangci-lint # appends & deduplicates
+git by set rev  google/gemini-4-carbon
 
 git by status                                                    # preview before committing
 git by commit -m "feat(engine): add zero-amend hook forwarding"  # clears session on exit 0
@@ -164,16 +164,16 @@ For single-shot commits, CI pipelines, or container sandboxes, pass flags direct
 
 ```bash
 # Stateless one-liner
-git by commit --impl anthropic/claude-sonnet-4 --plan openai/o3 --tool vitest -am "feat: PKCE verifier"
+git by commit --impl anthropic/claude-sonnet-5.5 --plan openai/gpt-6.2-astra --tool vitest -am "feat: PKCE verifier"
 
 # Environment variable configuration
-export GIT_BY_IMPLEMENTER="openai/gpt-6-astra,anthropic/claude-sonnet-4"
+export GIT_BY_IMPLEMENTER="openai/gpt-6-astra,anthropic/claude-sonnet-5.5"
 export GIT_BY_HARNESS="agy@2.0"
 export GIT_BY_TOOLS="go-test,golangci-lint"
 git by commit -m "refactor: extract trailer encoder"
 
 # Amend cleanly (preserves original author, refreshes managed trailers without duplicates)
-git by commit --impl anthropic/claude-sonnet-4 --amend --no-edit
+git by commit --impl anthropic/claude-sonnet-5.5 --amend --no-edit
 
 # Strip AI author suffix and managed trailers from an existing commit
 git by commit --clear-trailers --amend --no-edit

@@ -173,7 +173,7 @@
   <text x="36" y="221" class="sans sec-head">TOP IMPLEMENTERS</text>
   <text x="396" y="221" text-anchor="end" class="mono sec-tag">X-Agent-Implementer</text>
   <line x1="20" y1="232" x2="412" y2="232" class="inner-divider"/>
-  <text x="36" y="256" class="mono model-name">claude-sonnet-4</text>
+  <text x="36" y="256" class="mono model-name">claude-sonnet-5.5</text>
   <rect x="188" y="247" width="118" height="8" rx="4" class="track"/>
   <rect x="188" y="247" width="55.22" height="8" rx="4" class="impl-bar-0"/>
   <text x="396" y="256" text-anchor="end" class="mono model-stat">51 (46.8%)</text>
@@ -181,11 +181,11 @@
   <rect x="188" y="279" width="118" height="8" rx="4" class="track"/>
   <rect x="188" y="279" width="34.69" height="8" rx="4" class="impl-bar-1"/>
   <text x="396" y="288" text-anchor="end" class="mono model-stat">32 (29.4%)</text>
-  <text x="36" y="320" class="mono model-name">gemini-3-pro</text>
+  <text x="36" y="320" class="mono model-name">gemini-4-neon</text>
   <rect x="188" y="311" width="118" height="8" rx="4" class="track"/>
   <rect x="188" y="311" width="18.41" height="8" rx="4" class="impl-bar-2"/>
   <text x="396" y="320" text-anchor="end" class="mono model-stat">17 (15.6%)</text>
-  <text x="36" y="352" class="mono model-name">deepseek-v4.1</text>
+  <text x="36" y="352" class="mono model-name">deepseek-v4.1-flash</text>
   <rect x="188" y="343" width="118" height="8" rx="4" class="track"/>
   <rect x="188" y="343" width="9.68" height="8" rx="4" class="impl-bar-3"/>
   <text x="396" y="352" text-anchor="end" class="mono model-stat">9 (8.2%)</text>
@@ -194,15 +194,15 @@
   <text x="444" y="221" class="sans sec-head">TOP PLANNERS</text>
   <text x="804" y="221" text-anchor="end" class="mono sec-tag">X-Agent-Planner</text>
   <line x1="428" y1="232" x2="820" y2="232" class="inner-divider"/>
-  <text x="444" y="256" class="mono model-name">o3</text>
+  <text x="444" y="256" class="mono model-name">gpt-6.2-astra</text>
   <rect x="596" y="247" width="118" height="8" rx="4" class="track"/>
   <rect x="596" y="247" width="56.76" height="8" rx="4" class="plan-bar-0"/>
   <text x="804" y="256" text-anchor="end" class="mono model-stat">38 (48.1%)</text>
-  <text x="444" y="288" class="mono model-name">claude-opus-4</text>
+  <text x="444" y="288" class="mono model-name">claude-opus-5.5</text>
   <rect x="596" y="279" width="118" height="8" rx="4" class="track"/>
   <rect x="596" y="279" width="38.82" height="8" rx="4" class="plan-bar-1"/>
   <text x="804" y="288" text-anchor="end" class="mono model-stat">26 (32.9%)</text>
-  <text x="444" y="320" class="mono model-name">gemini-3-pro</text>
+  <text x="444" y="320" class="mono model-name">gemini-4-carbon</text>
   <rect x="596" y="311" width="118" height="8" rx="4" class="track"/>
   <rect x="596" y="311" width="22.42" height="8" rx="4" class="plan-bar-2"/>
   <text x="804" y="320" text-anchor="end" class="mono model-stat">15 (19.0%)</text>
