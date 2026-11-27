@@ -1,24 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="840" height="420" viewBox="0 0 840 420" role="img" aria-labelledby="git-by-card-title git-by-card-desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="476" viewBox="0 0 840 476" role="img" aria-labelledby="git-by-card-title git-by-card-desc">
   <title id="git-by-card-title">git-by — AI Provenance Analytics</title>
-  <desc id="git-by-card-desc">GitHub Dark AI provenance report for git-by showing Human vs AI Commit and LOC ratios, Top Implementer models, and Top Planner models.</desc>
+  <desc id="git-by-card-desc">AI provenance report for git-by: 148 commits (AI 73.6%, Human 26.4%), 18420 LOC changed.</desc>
 
   <defs>
     <linearGradient id="header-accent" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#58a6ff"/>
-      <stop offset="50%" stop-color="#a371f7"/>
-      <stop offset="100%" stop-color="#3fb950"/>
+      <stop offset="0%" class="stop-accent-blue" stop-color="#58a6ff"/>
+      <stop offset="50%" class="stop-accent-purple" stop-color="#a371f7"/>
+      <stop offset="100%" class="stop-accent-green" stop-color="#3fb950"/>
     </linearGradient>
     <linearGradient id="ai-commit-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#388bfd"/>
-      <stop offset="100%" stop-color="#58a6ff"/>
+      <stop offset="0%" class="stop-commit-start" stop-color="#388bfd"/>
+      <stop offset="100%" class="stop-commit-end" stop-color="#58a6ff"/>
     </linearGradient>
     <linearGradient id="ai-loc-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#8957e5"/>
-      <stop offset="100%" stop-color="#a371f7"/>
+      <stop offset="0%" class="stop-loc-start" stop-color="#8957e5"/>
+      <stop offset="100%" class="stop-loc-end" stop-color="#a371f7"/>
     </linearGradient>
     <clipPath id="outer-clip">
-      <rect x="1" y="1" width="838" height="418" rx="12"/>
+      <rect x="1" y="1" width="838" height="474" rx="12"/>
     </clipPath>
     <clipPath id="commit-bar-clip">
       <rect x="36" y="114" width="768" height="10" rx="5"/>
@@ -27,130 +27,194 @@
       <rect x="36" y="160" width="768" height="10" rx="5"/>
     </clipPath>
   </defs>
-
   <style>
+    svg {
+      --bg-card: #0d1117;
+      --bg-panel: #161b22;
+      --bg-track: #21262d;
+      --border: #30363d;
+      --divider: #21262d;
+      --text-primary: #f0f6fc;
+      --text-body: #c9d1d9;
+      --text-muted: #8b949e;
+      --text-empty: #6e7681;
+      --accent-blue: #58a6ff;
+      --accent-blue-2: #79c0ff;
+      --accent-blue-3: #a5d6ff;
+      --accent-blue-4: #388bfd;
+      --accent-purple: #a371f7;
+      --accent-purple-2: #d2a8ff;
+      --accent-purple-3: #bc8cff;
+      --accent-purple-4: #8957e5;
+      --accent-green: #3fb950;
+      --accent-green-bar: #2ea043;
+      --grad-commit-start: #388bfd;
+      --grad-commit-end: #58a6ff;
+      --grad-loc-start: #8957e5;
+      --grad-loc-end: #a371f7;
+    }
+    @media (prefers-color-scheme: light) {
+      svg {
+      --bg-card: #ffffff;
+      --bg-panel: #f6f8fa;
+      --bg-track: #eaeef2;
+      --border: #d0d7de;
+      --divider: #d8dee4;
+      --text-primary: #1f2328;
+      --text-body: #24292f;
+      --text-muted: #656d76;
+      --text-empty: #6e7781;
+      --accent-blue: #0969da;
+      --accent-blue-2: #218bff;
+      --accent-blue-3: #54aeff;
+      --accent-blue-4: #0550ae;
+      --accent-purple: #8250df;
+      --accent-purple-2: #a475f9;
+      --accent-purple-3: #c297ff;
+      --accent-purple-4: #6639ba;
+      --accent-green: #1a7f37;
+      --accent-green-bar: #2da44e;
+      --grad-commit-start: #0969da;
+      --grad-commit-end: #218bff;
+      --grad-loc-start: #8250df;
+      --grad-loc-end: #a475f9;
+      }
+    }
     .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
     .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
-    .title { fill: #f0f6fc; font-size: 18px; font-weight: 700; }
-    .badge-txt { fill: #58a6ff; font-size: 10.5px; font-weight: 600; letter-spacing: 0.6px; }
-    .meta { fill: #8b949e; font-size: 12px; }
-    .sec-label { fill: #8b949e; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; }
-    .sec-head { fill: #f0f6fc; font-size: 11.5px; font-weight: 700; letter-spacing: 0.5px; }
-    .sec-tag { fill: #8b949e; font-size: 10.5px; }
-    .model-name { fill: #c9d1d9; font-size: 12px; }
-    .model-stat { fill: #8b949e; font-size: 11.5px; }
-    .foot { fill: #8b949e; font-size: 11.5px; }
+    .card-bg { fill: var(--bg-card); }
+    .panel-bg { fill: var(--bg-panel); }
+    .panel-card { fill: var(--bg-panel); stroke: var(--border); stroke-width: 1; }
+    .card-border { fill: none; stroke: var(--border); stroke-width: 1.5; }
+    .header-divider { stroke: var(--border); stroke-width: 1; }
+    .inner-divider { stroke: var(--divider); stroke-width: 1; }
+    .pill-bg { fill: var(--bg-card); stroke: var(--border); stroke-width: 1; }
+    .track { fill: var(--bg-track); }
+    .bar-human { fill: var(--accent-green-bar); }
+    .dot-blue { fill: var(--accent-blue); }
+    .dot-purple { fill: var(--accent-purple); }
+    .dot-green { fill: var(--accent-green); }
+    .icon-blue { fill: none; stroke: var(--accent-blue); stroke-width: 1.8; }
+    .icon-purple { fill: none; stroke: var(--accent-purple); stroke-width: 1.8; }
+    .icon-green { fill: none; stroke: var(--accent-green); stroke-width: 1.8; }
+    .icon-edge { fill: none; stroke: var(--text-muted); stroke-width: 1.6; stroke-linecap: round; }
+    .impl-bar-0 { fill: var(--accent-blue); }
+    .impl-bar-1 { fill: var(--accent-blue-2); }
+    .impl-bar-2 { fill: var(--accent-blue-3); }
+    .impl-bar-3 { fill: var(--accent-blue-4); }
+    .plan-bar-0 { fill: var(--accent-purple); }
+    .plan-bar-1 { fill: var(--accent-purple-2); }
+    .plan-bar-2 { fill: var(--accent-purple-3); }
+    .plan-bar-3 { fill: var(--accent-purple-4); }
+    .stop-accent-blue { stop-color: var(--accent-blue); }
+    .stop-accent-purple { stop-color: var(--accent-purple); }
+    .stop-accent-green { stop-color: var(--accent-green); }
+    .stop-commit-start { stop-color: var(--grad-commit-start); }
+    .stop-commit-end { stop-color: var(--grad-commit-end); }
+    .stop-loc-start { stop-color: var(--grad-loc-start); }
+    .stop-loc-end { stop-color: var(--grad-loc-end); }
+    .title { fill: var(--text-primary); font-size: 18px; font-weight: 700; }
+    .badge-txt { fill: var(--accent-blue); font-size: 10.5px; font-weight: 600; letter-spacing: 0.6px; }
+    .meta { fill: var(--text-muted); font-size: 12px; }
+    .sec-label { fill: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: 0.5px; }
+    .sec-head { fill: var(--text-primary); font-size: 11.5px; font-weight: 700; letter-spacing: 0.5px; }
+    .sec-tag { fill: var(--text-muted); font-size: 10.5px; }
+    .model-name { fill: var(--text-body); font-size: 12px; }
+    .model-stat { fill: var(--text-muted); font-size: 11.5px; }
+    .empty-note { fill: var(--text-empty); font-size: 11.5px; font-style: italic; }
+    .foot { fill: var(--text-muted); font-size: 11.5px; }
   </style>
 
-  <!-- Outer Card Background & Header -->
+  <!-- Outer Card Background &amp; Header -->
   <g clip-path="url(#outer-clip)">
-    <rect x="1" y="1" width="838" height="418" fill="#0d1117"/>
-    <rect x="1" y="1" width="838" height="64" fill="#161b22"/>
+    <rect x="1" y="1" width="838" height="474" class="card-bg"/>
+    <rect x="1" y="1" width="838" height="64" class="panel-bg"/>
     <rect x="1" y="1" width="838" height="3" fill="url(#header-accent)"/>
-    <line x1="1" y1="65" x2="839" y2="65" stroke="#30363d" stroke-width="1"/>
+    <line x1="1" y1="65" x2="839" y2="65" class="header-divider"/>
   </g>
-  <rect x="1" y="1" width="838" height="418" rx="12" fill="none" stroke="#30363d" stroke-width="1.5"/>
+  <rect x="1" y="1" width="838" height="474" rx="12" class="card-border"/>
 
   <!-- Header Content -->
   <g transform="translate(24, 22)">
-    <circle cx="6" cy="6" r="3" fill="none" stroke="#58a6ff" stroke-width="1.8"/>
-    <circle cx="18" cy="6" r="3" fill="none" stroke="#a371f7" stroke-width="1.8"/>
-    <circle cx="6" cy="18" r="3" fill="none" stroke="#3fb950" stroke-width="1.8"/>
-    <path d="M6 9 L6 15 M18 9 C18 13, 6 11, 6 15" fill="none" stroke="#8b949e" stroke-width="1.6" stroke-linecap="round"/>
+    <circle cx="6" cy="6" r="3" class="icon-blue"/>
+    <circle cx="18" cy="6" r="3" class="icon-purple"/>
+    <circle cx="6" cy="18" r="3" class="icon-green"/>
+    <path d="M6 9 L6 15 M18 9 C18 13, 6 11, 6 15" class="icon-edge"/>
   </g>
   <text x="54" y="40" class="mono title">git-by</text>
-  <rect x="128" y="23" width="132" height="22" rx="11" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
-  <text x="194" y="38" text-anchor="middle" class="sans badge-txt">AI PROVENANCE</text>
-  <text x="816" y="39" text-anchor="end" class="mono meta">148 Commits &#183; 18,420 LOC &#183; Kernel Assisted-by Spec</text>
+  <rect x="134" y="23" width="124" height="22" rx="11" class="pill-bg"/>
+  <text x="196" y="38" text-anchor="middle" class="sans badge-txt">AI PROVENANCE</text>
+  <text x="816" y="39" text-anchor="end" class="mono meta">148 Commits · 18,420 LOC · Kernel Assisted-by Spec</text>
 
-  <!-- Section 1: Human vs AI Commit & LOC Ratio -->
-  <rect x="20" y="80" width="800" height="106" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
-
-  <!-- Commit Ratio Bar -->
+  <!-- Section 1: Human vs AI Commit and LOC Ratio -->
+  <rect x="20" y="80" width="800" height="106" rx="8" class="panel-card"/>
   <text x="36" y="105" class="sans sec-label">COMMITS</text>
-  <circle cx="108" cy="101" r="4" fill="#58a6ff"/>
-  <text x="118" y="105" class="mono model-name">AI-Assisted: 109 (73.6%)</text>
-  <circle cx="635" cy="101" r="4" fill="#3fb950"/>
-  <text x="804" y="105" text-anchor="end" textLength="159" class="mono model-name">Human Solo: 39 (26.4%)</text>
+  <circle cx="110" cy="101" r="4" class="dot-blue"/>
+  <text x="120" y="105" class="mono model-name">AI-Assisted: 109 (73.6%)</text>
+  <text x="792" y="105" text-anchor="end" class="mono model-name">Human Solo: 39 (26.4%)</text>
+  <circle cx="800" cy="101" r="4" class="dot-green"/>
   <g clip-path="url(#commit-bar-clip)">
-    <rect x="36" y="114" width="768" height="10" fill="#21262d"/>
-    <rect x="36" y="114" width="565" height="10" fill="url(#ai-commit-grad)"/>
-    <rect x="603" y="114" width="201" height="10" fill="#2ea043"/>
+    <rect x="36" y="114" width="768" height="10" class="track"/>
+    <rect x="36" y="114" width="563.78" height="10" fill="url(#ai-commit-grad)"/>
+    <rect x="601.78" y="114" width="202.22" height="10" class="bar-human"/>
   </g>
-
-  <!-- LOC Ratio Bar -->
   <text x="36" y="151" class="sans sec-label">LOC CHANGED</text>
-  <circle cx="132" cy="147" r="4" fill="#a371f7"/>
-  <text x="142" y="151" class="mono model-name">AI: +11,840 / -2,190 (76.2%)</text>
-  <circle cx="592" cy="147" r="4" fill="#3fb950"/>
-  <text x="804" y="151" text-anchor="end" textLength="202" class="mono model-name">Human: +3,410 / -980 (23.8%)</text>
+  <circle cx="136" cy="147" r="4" class="dot-purple"/>
+  <text x="146" y="151" class="mono model-name">AI: +11,840 / -2,190 (76.2%)</text>
+  <text x="792" y="151" text-anchor="end" class="mono model-name">Human: +3,410 / -980 (23.8%)</text>
+  <circle cx="800" cy="147" r="4" class="dot-green"/>
   <g clip-path="url(#loc-bar-clip)">
-    <rect x="36" y="160" width="768" height="10" fill="#21262d"/>
-    <rect x="36" y="160" width="585" height="10" fill="url(#ai-loc-grad)"/>
-    <rect x="623" y="160" width="181" height="10" fill="#2ea043"/>
+    <rect x="36" y="160" width="768" height="10" class="track"/>
+    <rect x="36" y="160" width="583.69" height="10" fill="url(#ai-loc-grad)"/>
+    <rect x="621.69" y="160" width="182.31" height="10" class="bar-human"/>
   </g>
 
-  <!-- Section 2 Left: Top Implementer Models -->
-  <rect x="20" y="198" width="392" height="178" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <rect x="20" y="198" width="392" height="182" rx="8" class="panel-card"/>
   <text x="36" y="221" class="sans sec-head">TOP IMPLEMENTERS</text>
   <text x="396" y="221" text-anchor="end" class="mono sec-tag">X-Agent-Implementer</text>
-  <line x1="20" y1="232" x2="412" y2="232" stroke="#21262d" stroke-width="1"/>
-
-  <!-- Implementer 1 -->
+  <line x1="20" y1="232" x2="412" y2="232" class="inner-divider"/>
   <text x="36" y="256" class="mono model-name">claude-sonnet-4</text>
-  <rect x="166" y="247" width="136" height="8" rx="4" fill="#21262d"/>
-  <rect x="166" y="247" width="108" height="8" rx="4" fill="#58a6ff"/>
+  <rect x="188" y="247" width="118" height="8" rx="4" class="track"/>
+  <rect x="188" y="247" width="55.22" height="8" rx="4" class="impl-bar-0"/>
   <text x="396" y="256" text-anchor="end" class="mono model-stat">51 (46.8%)</text>
-
-  <!-- Implementer 2 -->
   <text x="36" y="288" class="mono model-name">gpt-6-astra</text>
-  <rect x="166" y="279" width="136" height="8" rx="4" fill="#21262d"/>
-  <rect x="166" y="279" width="68" height="8" rx="4" fill="#79c0ff"/>
+  <rect x="188" y="279" width="118" height="8" rx="4" class="track"/>
+  <rect x="188" y="279" width="34.69" height="8" rx="4" class="impl-bar-1"/>
   <text x="396" y="288" text-anchor="end" class="mono model-stat">32 (29.4%)</text>
-
-  <!-- Implementer 3 -->
   <text x="36" y="320" class="mono model-name">gemini-3-pro</text>
-  <rect x="166" y="311" width="136" height="8" rx="4" fill="#21262d"/>
-  <rect x="166" y="311" width="36" height="8" rx="4" fill="#a5d6ff"/>
+  <rect x="188" y="311" width="118" height="8" rx="4" class="track"/>
+  <rect x="188" y="311" width="18.41" height="8" rx="4" class="impl-bar-2"/>
   <text x="396" y="320" text-anchor="end" class="mono model-stat">17 (15.6%)</text>
-
-  <!-- Implementer 4 -->
   <text x="36" y="352" class="mono model-name">deepseek-v4.1</text>
-  <rect x="166" y="343" width="136" height="8" rx="4" fill="#21262d"/>
-  <rect x="166" y="343" width="19" height="8" rx="4" fill="#388bfd"/>
+  <rect x="188" y="343" width="118" height="8" rx="4" class="track"/>
+  <rect x="188" y="343" width="9.68" height="8" rx="4" class="impl-bar-3"/>
   <text x="396" y="352" text-anchor="end" class="mono model-stat">9 (8.2%)</text>
 
-  <!-- Section 2 Right: Top Planner Models -->
-  <rect x="428" y="198" width="392" height="178" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <rect x="428" y="198" width="392" height="182" rx="8" class="panel-card"/>
   <text x="444" y="221" class="sans sec-head">TOP PLANNERS</text>
   <text x="804" y="221" text-anchor="end" class="mono sec-tag">X-Agent-Planner</text>
-  <line x1="428" y1="232" x2="820" y2="232" stroke="#21262d" stroke-width="1"/>
-
-  <!-- Planner 1 -->
-  <text x="444" y="256" class="mono model-name">openai/o3</text>
-  <rect x="574" y="247" width="136" height="8" rx="4" fill="#21262d"/>
-  <rect x="574" y="247" width="110" height="8" rx="4" fill="#a371f7"/>
+  <line x1="428" y1="232" x2="820" y2="232" class="inner-divider"/>
+  <text x="444" y="256" class="mono model-name">o3</text>
+  <rect x="596" y="247" width="118" height="8" rx="4" class="track"/>
+  <rect x="596" y="247" width="56.76" height="8" rx="4" class="plan-bar-0"/>
   <text x="804" y="256" text-anchor="end" class="mono model-stat">38 (48.1%)</text>
-
-  <!-- Planner 2 -->
   <text x="444" y="288" class="mono model-name">claude-opus-4</text>
-  <rect x="574" y="279" width="136" height="8" rx="4" fill="#21262d"/>
-  <rect x="574" y="279" width="76" height="8" rx="4" fill="#d2a8ff"/>
+  <rect x="596" y="279" width="118" height="8" rx="4" class="track"/>
+  <rect x="596" y="279" width="38.82" height="8" rx="4" class="plan-bar-1"/>
   <text x="804" y="288" text-anchor="end" class="mono model-stat">26 (32.9%)</text>
-
-  <!-- Planner 3 -->
   <text x="444" y="320" class="mono model-name">gemini-3-pro</text>
-  <rect x="574" y="311" width="136" height="8" rx="4" fill="#21262d"/>
-  <rect x="574" y="311" width="44" height="8" rx="4" fill="#bc8cff"/>
+  <rect x="596" y="311" width="118" height="8" rx="4" class="track"/>
+  <rect x="596" y="311" width="22.42" height="8" rx="4" class="plan-bar-2"/>
   <text x="804" y="320" text-anchor="end" class="mono model-stat">15 (19.0%)</text>
 
-  <!-- Active Harnesses Footer Row inside Right Card -->
-  <line x1="428" y1="336" x2="820" y2="336" stroke="#21262d" stroke-width="1"/>
-  <text x="444" y="358" class="sans sec-label">HARNESSES</text>
-  <text x="804" y="358" text-anchor="end" class="mono model-stat">claude-code &#183; pi &#183; cursor &#183; antigravity</text>
+  <!-- Section 3: Harnesses Bar -->
+  <rect x="20" y="392" width="800" height="40" rx="8" class="panel-card"/>
+  <text x="36" y="416" class="sans sec-label">HARNESSES</text>
+  <text x="128" y="416" class="mono model-name">claude-code · pi · cursor · antigravity</text>
+  <text x="804" y="416" text-anchor="end" class="mono sec-tag">X-Agent-Harness</text>
 
   <!-- Bottom Footer -->
-  <text x="24" y="400" class="mono foot">$ git by stats --badge ./assets/ai-provenance.svg</text>
-  <circle cx="440.5" cy="396" r="3.5" fill="#3fb950"/>
-  <text x="816" y="400" text-anchor="end" textLength="366" class="mono foot">GPG/SSH Intact &#183; Worktree Safe &#183; Zero Fake Co-Authors</text>
+  <text x="24" y="458" class="mono foot">$ git by stats --badge</text>
+  <text x="804" y="458" text-anchor="end" class="mono foot">GPG/SSH Intact · Worktree Safe · Zero Fake Co-Authors</text>
+  <circle cx="812" cy="454" r="3.5" class="dot-green"/>
 </svg>

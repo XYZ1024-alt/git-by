@@ -250,7 +250,7 @@ git by setup --project --remove -y
 
 | Flag | Behavior |
 | :--- | :--- |
-| *(default)* / `--global` | Opens the global multi-select agent picker on a TTY (detected agents pre-checked; auto-scrolls in compact terminal panes), or auto-configures detected agents across all 30 mainstream harnesses (honoring `$PI_CODING_AGENT_DIR`, `$OMP_CODING_AGENT_DIR`, `$CODEX_HOME`, `$COPILOT_HOME`, `$CLINE_DIR`, `$DSH_HOME`, `$KIMI_CODE_HOME`, `$HERMES_HOME`) in non-TTY mode |
+| *(default)* / `--global` | Opens the global multi-select agent picker on a TTY (detected agents pre-checked; auto-scrolls and adapts column widths on compact/narrow terminals), or auto-configures detected agents across all 30 mainstream harnesses (honoring `$PI_CODING_AGENT_DIR`, `$OMP_CODING_AGENT_DIR`, `$CODEX_HOME`, `$COPILOT_HOME`, `$CLINE_DIR`, `$DSH_HOME`, `$KIMI_CODE_HOME`, `$HERMES_HOME`) in non-TTY mode |
 | `--project` | Opens the repository target picker on a TTY (`AGENTS.md` + existing rule files pre-checked), or injects into `AGENTS.md` + existing project rule files (`CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.cursorrules`, `.windsurfrules`, `.clinerules/`, `.roo/rules/`, `.kiro/steering/`, etc.) in non-TTY mode |
 | `--agent <names>` | Bypass picker and filter target harnesses (`agy`, `pi`, `claude`, `codex`, `opencode`, `dsh`, `cursor`, `windsurf`, `omp`, `gemini`, `copilot`, `cline`, `roo`, `kilo`, `droid`, `amp`, `goose`, `crush`, `kiro`, `continue`, `trae`, `augment`, `qwen`, `kimi`, `codebuddy`, `junie`, `zed`, `aider`, `openhands`, `hermes`) |
 | `-y`, `--yes` | Bypass interactive picker on a TTY and auto-configure detected targets |
@@ -345,6 +345,12 @@ export GIT_BY_HARNESS="agy@2.0"
 export GIT_BY_TOOLS="go-test,golangci-lint"
 
 git by commit -m "refactor: extract trailer encoder"
+
+# Amend an existing commit cleanly (inherits original author, refreshes managed trailers without duplicates)
+git by commit --impl anthropic/claude-sonnet-4 --amend --no-edit
+
+# Strip managed AI trailers and author attribution suffix when amending
+git by commit --clear-trailers --amend --no-edit
 ```
 
 ---
@@ -372,7 +378,7 @@ git by hook uninstall --global
 
 ### Provenance Analytics & SVG Badge
 
-Turn your repository's Git trailer history (including Linux Kernel-style `Assisted-by` commits!) into actionable engineering insights or a live README card:
+Stream your repository's Git trailer history in a single pass with constant memory (including Linux Kernel-style `Assisted-by` commits!) into actionable engineering insights or an adaptive Light/Dark README card:
 
 ```bash
 # Render interactive ANSI terminal dashboard
@@ -384,8 +390,9 @@ git by stats --since "2026-01-01" --top 10
 # Export structured JSON for CI pipelines & engineering telemetry
 git by stats --since "30 days ago" --json
 
-# Generate standalone GitHub-Dark SVG provenance card (zero external fonts/assets)
+# Generate standalone adaptive Light/Dark SVG provenance card (default: --theme auto; also dark | light)
 git by stats --badge ./assets/ai-provenance.svg
+git by stats --badge ./assets/ai-provenance-light.svg --theme light
 ```
 
 Embed the generated SVG anywhere in your `README.md`:
@@ -404,10 +411,10 @@ Embed the generated SVG anywhere in your `README.md`:
 | `git by set <role> <model> [--harness <h>] [--tool <t>...] [--replace]` | Record agent participation in the current worktree's `by-session.json` |
 | `git by status` | Preview merged roles, `Git Author`, `Git Committer`, and `Git Trailers` |
 | `git by clear` | Clear staged provenance metadata for the current worktree |
-| `git by commit [git-by flags] [git commit flags...]` | Commit with dynamic `Author`, ordered trailers, `$0`-safe hooks, and session cleanup |
+| `git by commit [git-by flags] [--clear-trailers] [git commit flags...]` | Commit with dynamic `Author`, `--amend`-safe deduplicated trailers (or `--clear-trailers`), `$0`-safe hook forwarding, and session cleanup |
 | `git by hook install [--global]` | Install chain-safe `prepare-commit-msg` & `post-commit` hooks |
 | `git by hook uninstall [--global]` | Remove `git-by` hooks while preserving pre-existing user hooks |
-| `git by stats [--since <date>] [--json] [--badge <path>] [--top <n>]` | Analyze Human vs AI commits/LOC and render terminal/JSON/SVG reports |
+| `git by stats [--since <date>] [--json] [--badge <path>] [--theme <auto\|dark\|light>] [--top <n>]` | Stream-analyze Human vs AI commits/LOC and render terminal/JSON/adaptive-theme SVG reports |
 | `git by prompt` / `git by init-skill` | Print the unified `<!-- git-by:start --> ... <!-- git-by:end -->` agent rule block to stdout |
 | `git by version` / `git by help` | Display binary version or command usage |
 
@@ -616,7 +623,7 @@ git by setup --project --remove -y
 
 | 参数 | 行为说明 |
 | :--- | :--- |
-| *(默认)* / `--global` | 在终端 TTY 下打开全局 Agent 多选面板（已检测工具默认勾选，小窗口终端自动视口滚动）；非交互模式下自动检测并配置全部 30 款主流 Harness（原生兼容 `$PI_CODING_AGENT_DIR`、`$OMP_CODING_AGENT_DIR`、`$CODEX_HOME`、`$COPILOT_HOME`、`$CLINE_DIR`、`$DSH_HOME`、`$KIMI_CODE_HOME`、`$HERMES_HOME`），且不创建多余目录 |
+| *(默认)* / `--global` | 在终端 TTY 下打开全局 Agent 多选面板（已检测工具默认勾选，小窗口/窄终端自动视口滚动与列宽自适应截断）；非交互模式下自动检测并配置全部 30 款主流 Harness（原生兼容 `$PI_CODING_AGENT_DIR`、`$OMP_CODING_AGENT_DIR`、`$CODEX_HOME`、`$COPILOT_HOME`、`$CLINE_DIR`、`$DSH_HOME`、`$KIMI_CODE_HOME`、`$HERMES_HOME`），且不创建多余目录 |
 | `--project` | 在终端 TTY 下打开仓库规则多选面板（默认勾选 `AGENTS.md` 与已存在的规则文件）；非交互模式下写入 `AGENTS.md` 并同步更新已存在的项目级规则文件（`CLAUDE.md`、`GEMINI.md`、`.github/copilot-instructions.md`、`.cursorrules`、`.windsurfrules`、`.clinerules/`、`.roo/rules/`、`.kiro/steering/` 等） |
 | `--agent <names>` | 跳过交互面板并精确指定目标 Harness（支持 `agy`、`pi`、`claude`、`codex`、`opencode`、`dsh`、`cursor`、`windsurf`、`omp`、`gemini`、`copilot`、`cline`、`roo`、`kilo`、`droid`、`amp`、`goose`、`crush`、`kiro`、`continue`、`trae`、`augment`、`qwen`、`kimi`、`codebuddy`、`junie`、`zed`、`aider`、`openhands`、`hermes`） |
 | `-y`, `--yes` | 在终端 TTY 下跳过交互多选面板，直接按自动检测结果执行 |
@@ -697,6 +704,12 @@ export GIT_BY_HARNESS="claude-code@1.0.24"
 export GIT_BY_TOOLS="golangci-lint,go-test"
 
 git by commit -S -m "fix: handle empty repository stats"
+
+# 配合 --amend 干净修订提交（保留原作者身份并去重刷新受管 Trailers，避免叠加重复的 "by <model>"）
+git by commit --impl anthropic/claude-sonnet-4 --amend --no-edit
+
+# 修订提交时一键清除受管 AI Trailers 与作者归属后缀
+git by commit --clear-trailers --amend --no-edit
 ```
 
 ---
@@ -722,7 +735,7 @@ git by hook uninstall [--global]
 
 ### 代码溯源统计与 SVG 卡片
 
-`git by stats` 单趟解析仓库提交历史与 `--numstat` 代码行变更（同时兼容统计纯 Linux Kernel `Assisted-by` 风格的历史提交），支持终端可视化看板、JSON 导出与独立暗色风 SVG 统计卡片生成：
+`git by stats` 流式单趟解析仓库提交历史与 `--numstat` 代码行变更（恒定内存开销，同时兼容统计纯 Linux Kernel `Assisted-by` 风格的历史提交），支持终端可视化看板、JSON 导出与深浅色自适应 SVG 统计卡片生成：
 
 ```bash
 # 终端看板：展示人类 vs AI 提交占比、代码增删行数占比及 Implementer / Planner 模型排行榜
@@ -734,8 +747,9 @@ git by stats --since "2026-01-01" --top 5
 # 导出结构化 JSON 供工程效能平台消费
 git by stats --since "2026-01-01" --json
 
-# 生成零外部依赖的 GitHub Dark 风格 SVG 卡片（可直接嵌入 README.md）
-git by stats --badge ./ai-provenance.svg
+# 生成零外部依赖的深浅色自适应 SVG 卡片（默认 --theme auto，跟随系统/GitHub 主题；也可指定 dark 或 light）
+git by stats --badge ./assets/ai-provenance.svg
+git by stats --badge ./assets/ai-provenance-light.svg --theme light
 ```
 
 ---
@@ -748,10 +762,10 @@ git by stats --badge ./ai-provenance.svg
 | `git by set <role> <model> [--harness <h>] [--tool <t>...] [--replace]` | 在当前 Worktree 的 `by-session.json` 中记录模型角色参与信息 |
 | `git by status` | 预览合并后的多智能体分工、`Git Author`、`Git Committer` 与 `Git Trailers` |
 | `git by clear` | 清空当前 Worktree 暂存的会话溯源元数据 |
-| `git by commit [git-by 参数] [git commit 参数...]` | 注入动态 `Author`、有序 Trailers、`$0` 安全钩子转发并完成提交与会话清理 |
+| `git by commit [git-by 参数] [--clear-trailers] [git commit 参数...]` | 注入动态 `Author`、支持 `--amend` 去重刷新（或 `--clear-trailers` 清除）、`$0` 安全钩子转发并完成提交与会话清理 |
 | `git by hook install [--global]` | 安装链式安全的 `prepare-commit-msg` 与 `post-commit` 钩子 |
 | `git by hook uninstall [--global]` | 安全移除 `git-by` 钩子片段并保留原有自定义钩子 |
-| `git by stats [--since <date>] [--json] [--badge <path>] [--top <n>]` | 统计人类 vs AI 提交与代码行数占比，输出终端看板、JSON 或 SVG 卡片 |
+| `git by stats [--since <date>] [--json] [--badge <path>] [--theme <auto\|dark\|light>] [--top <n>]` | 流式统计人类 vs AI 提交与代码行数占比，输出终端看板、JSON 或深浅色自适应 SVG 卡片 |
 | `git by prompt` / `git by init-skill` | 向标准输出打印统一的 `<!-- git-by:start --> ... <!-- git-by:end -->` 规则块 |
 | `git by version` / `git by help` | 查看版本号或命令帮助信息 |
 
